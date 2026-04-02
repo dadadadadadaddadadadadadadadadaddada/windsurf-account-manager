@@ -1,0 +1,400 @@
+<script setup>
+import { ref, watch, onMounted } from "vue";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import AccountTable from "./components/AccountTable.vue";
+import AddAccountDialog from "./components/AddAccountDialog.vue";
+import SwitchProgressDialog from "./components/SwitchProgressDialog.vue";
+import {
+  listAccounts,
+  addAccount,
+  deleteAccounts,
+  switchAccount,
+  getAccountToken,
+  refreshPlanStatus,
+  onSwitchProgress,
+} from "./lib/tauri";
+
+const accounts = ref([]);
+const stats = ref({ total: 0, free: 0, trial: 0, pro: 0, unknown: 0 });
+const searchQuery = ref("");
+const filterType = ref("all");
+const selectedIds = ref([]);
+const showAddDialog = ref(false);
+
+const switching = ref(false);
+const switchProgress = ref(null);
+
+const gettingTokenIds = ref(new Set());
+const batchGettingToken = ref(false);
+const batchTokenProgress = ref({ done: 0, total: 0, failed: 0 });
+const confirmDialog = ref(null);
+const batchRefreshingQuota = ref(false);
+const batchQuotaProgress = ref({ done: 0, total: 0, failed: 0 });
+
+async function loadAccounts() {
+  try {
+    accounts.value = await listAccounts();
+    updateStats();
+  } catch (e) {
+    console.error("Failed to load accounts:", e);
+  }
+}
+
+function updateStats() {
+  const all = accounts.value;
+  stats.value = {
+    total: all.length,
+    free: all.filter((a) => a.account_type === "Free").length,
+    trial: all.filter((a) => a.account_type === "Trial").length,
+    pro: all.filter((a) => a.account_type === "Pro").length,
+    unknown: all.filter(
+      (a) => !["Free", "Trial", "Pro"].includes(a.account_type)
+    ).length,
+  };
+}
+
+const filteredAccounts = ref([]);
+function updateFilteredAccounts() {
+  let result = accounts.value;
+  if (filterType.value !== "all") {
+    result = result.filter(
+      (a) => a.account_type.toLowerCase() === filterType.value.toLowerCase()
+    );
+  }
+  if (searchQuery.value) {
+    const q = searchQuery.value.toLowerCase();
+    result = result.filter((a) => a.email.toLowerCase().includes(q));
+  }
+  filteredAccounts.value = result;
+}
+
+watch([accounts, searchQuery, filterType], updateFilteredAccounts, {
+  immediate: true,
+});
+
+async function handleAddAccount(input) {
+  try {
+    await addAccount(input);
+    showAddDialog.value = false;
+    await loadAccounts();
+  } catch (e) {
+    console.error("添加失败:", e);
+  }
+}
+
+function handleDeleteSelected() {
+  if (selectedIds.value.length === 0) return;
+  confirmDialog.value = {
+    title: '确认删除',
+    message: `确定要删除选中的 ${selectedIds.value.length} 个账号吗？此操作不可撤销。`,
+    onConfirm: async () => {
+      confirmDialog.value = null;
+      try {
+        await deleteAccounts(selectedIds.value);
+        selectedIds.value = [];
+        await loadAccounts();
+      } catch (e) {
+        confirmDialog.value = { title: '删除失败', message: String(e), onConfirm: () => { confirmDialog.value = null; } };
+      }
+    },
+  };
+}
+
+async function handleGetToken(accountId) {
+  gettingTokenIds.value.add(accountId);
+  try {
+    const result = await getAccountToken(accountId);
+    console.log("获取Token结果:", result);
+    await loadAccounts();
+  } catch (e) {
+    console.error("获取Token失败:", e);
+    confirmDialog.value = { title: '获取Token失败', message: String(e), onConfirm: () => { confirmDialog.value = null; } };
+  } finally {
+    gettingTokenIds.value.delete(accountId);
+  }
+}
+
+async function handleBatchGetToken() {
+  const ids = selectedIds.value.length > 0
+    ? [...selectedIds.value]
+    : accounts.value.map((a) => a.id);
+  if (ids.length === 0) return;
+
+  batchGettingToken.value = true;
+  batchTokenProgress.value = { done: 0, total: ids.length, failed: 0 };
+  const failures = [];
+
+  const concurrency = 100;
+  for (let i = 0; i < ids.length; i += concurrency) {
+    const batch = ids.slice(i, i + concurrency);
+    const idToEmail = {};
+    for (const id of batch) {
+      const acc = accounts.value.find((a) => a.id === id);
+      if (acc) idToEmail[id] = acc.email;
+    }
+    const results = await Promise.allSettled(
+      batch.map((id) => getAccountToken(id))
+    );
+    for (let j = 0; j < results.length; j++) {
+      batchTokenProgress.value.done++;
+      if (results[j].status === "rejected") {
+        batchTokenProgress.value.failed++;
+        failures.push(`${idToEmail[batch[j]] || batch[j]}: ${results[j].reason}`);
+      }
+    }
+  }
+
+  await loadAccounts();
+  batchGettingToken.value = false;
+
+  const success = ids.length - failures.length;
+  let msg = `成功 ${success}/${ids.length}`;
+  if (failures.length > 0) {
+    msg += `\n\n失败账号:\n${failures.join('\n')}`;
+  }
+  confirmDialog.value = {
+    title: '批量获取Token完成',
+    message: msg,
+    onConfirm: () => { confirmDialog.value = null; },
+  };
+}
+
+async function handleBatchRefreshQuota() {
+  const ids = selectedIds.value.length > 0
+    ? [...selectedIds.value]
+    : accounts.value.map((a) => a.id);
+  if (ids.length === 0) return;
+
+  batchRefreshingQuota.value = true;
+  batchQuotaProgress.value = { done: 0, total: ids.length, failed: 0 };
+  const failures = [];
+
+  const concurrency = 100;
+  for (let i = 0; i < ids.length; i += concurrency) {
+    const batch = ids.slice(i, i + concurrency);
+    const idToEmail = {};
+    for (const id of batch) {
+      const acc = accounts.value.find((a) => a.id === id);
+      if (acc) idToEmail[id] = acc.email;
+    }
+    const results = await Promise.allSettled(
+      batch.map((id) => refreshPlanStatus(id))
+    );
+    for (let j = 0; j < results.length; j++) {
+      batchQuotaProgress.value.done++;
+      if (results[j].status === "rejected") {
+        batchQuotaProgress.value.failed++;
+        failures.push(`${idToEmail[batch[j]] || batch[j]}: ${results[j].reason}`);
+      }
+    }
+  }
+
+  await loadAccounts();
+  batchRefreshingQuota.value = false;
+
+  if (failures.length > 0) {
+    confirmDialog.value = {
+      title: '刷新配额完成',
+      message: `成功 ${ids.length - failures.length}/${ids.length}\n\n失败:\n${failures.join('\n')}`,
+      onConfirm: () => { confirmDialog.value = null; },
+    };
+  }
+}
+
+async function handleSwitch(accountId) {
+  switching.value = true;
+  switchProgress.value = { step: 0, total: 5, message: "准备切换..." };
+  try {
+    await switchAccount(accountId);
+    switchProgress.value = { step: 5, total: 5, message: "切换完成!" };
+    setTimeout(() => {
+      switching.value = false;
+      switchProgress.value = null;
+    }, 1500);
+  } catch (e) {
+    switchProgress.value = { step: 0, total: 5, message: "切换失败: " + e };
+    setTimeout(() => {
+      switching.value = false;
+      switchProgress.value = null;
+    }, 3000);
+  }
+}
+
+onMounted(async () => {
+  await loadAccounts();
+  onSwitchProgress((progress) => {
+    switchProgress.value = progress;
+  });
+});
+</script>
+
+<template>
+  <div class="h-screen flex flex-col bg-gray-50 text-gray-800 select-none">
+    <!-- Header -->
+    <header class="flex-shrink-0 border-b border-gray-200 bg-white px-6 py-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h1 class="text-xl font-bold text-gray-900">账号管理</h1>
+          <p class="text-sm text-gray-500 mt-0.5">
+            共 {{ stats.total }} 个账号
+            <span v-if="stats.free" class="text-green-600 ml-2">Free: {{ stats.free }}</span>
+            <span v-if="stats.trial" class="text-orange-500 ml-2">Trial: {{ stats.trial }}</span>
+            <span v-if="stats.pro" class="text-blue-600 ml-2">Pro: {{ stats.pro }}</span>
+          </p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            @click="handleBatchGetToken"
+            :disabled="batchGettingToken"
+            :class="[
+              'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors',
+              batchGettingToken
+                ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                : 'border-green-300 text-green-700 hover:bg-green-50',
+            ]"
+          >
+            <svg class="w-4 h-4" :class="{ 'animate-spin': batchGettingToken }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <template v-if="batchGettingToken">
+              {{ batchTokenProgress.done }}/{{ batchTokenProgress.total }}
+              <span v-if="batchTokenProgress.failed" class="text-red-500">({{ batchTokenProgress.failed }}失败)</span>
+            </template>
+            <template v-else>
+              批量获取Token{{ selectedIds.length > 0 ? ` (${selectedIds.length})` : '' }}
+            </template>
+          </button>
+          <button
+            @click="handleBatchRefreshQuota"
+            :disabled="batchRefreshingQuota"
+            :class="[
+              'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors',
+              batchRefreshingQuota
+                ? 'border-gray-200 text-gray-400 cursor-not-allowed'
+                : 'border-purple-300 text-purple-700 hover:bg-purple-50',
+            ]"
+          >
+            <svg class="w-4 h-4" :class="{ 'animate-spin': batchRefreshingQuota }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            <template v-if="batchRefreshingQuota">
+              {{ batchQuotaProgress.done }}/{{ batchQuotaProgress.total }}
+              <span v-if="batchQuotaProgress.failed" class="text-red-500">({{ batchQuotaProgress.failed }}失败)</span>
+            </template>
+            <template v-else>
+              刷新配额{{ selectedIds.length > 0 ? ` (${selectedIds.length})` : '' }}
+            </template>
+          </button>
+          <button
+            v-if="selectedIds.length > 0"
+            @click="handleDeleteSelected"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            删除 ({{ selectedIds.length }})
+          </button>
+          <button
+            @click="showAddDialog = true"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+            </svg>
+            添加账号
+          </button>
+          <button
+            @click="openUrl('https://shop.xiaobiao.ltd')"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors shadow-sm"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z" />
+            </svg>
+            购买账号
+          </button>
+        </div>
+      </div>
+
+      <!-- Search & Filter -->
+      <div class="flex items-center gap-3 mt-3">
+        <div class="relative flex-1 max-w-sm">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="搜索邮箱..."
+            class="w-full pl-9 pr-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+        </div>
+        <div class="flex gap-1">
+          <button
+            v-for="t in [
+              { key: 'all', label: '全部' },
+              { key: 'Free', label: 'Free' },
+              { key: 'Trial', label: 'Trial' },
+              { key: 'Unknown', label: '未知' },
+            ]"
+            :key="t.key"
+            @click="filterType = t.key"
+            :class="[
+              'px-3 py-1 text-sm rounded-full transition-colors',
+              filterType === t.key
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
+            ]"
+          >
+            {{ t.label }}
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Table -->
+    <main class="flex-1 overflow-auto">
+      <AccountTable
+        :accounts="filteredAccounts"
+        :gettingTokenIds="gettingTokenIds"
+        v-model:selectedIds="selectedIds"
+        @switch="handleSwitch"
+        @get-token="handleGetToken"
+        @delete="(id) => { deleteAccounts([id]).then(loadAccounts); }"
+      />
+    </main>
+
+    <!-- Dialogs -->
+    <AddAccountDialog
+      v-if="showAddDialog"
+      @close="showAddDialog = false"
+      @submit="handleAddAccount"
+    />
+    <SwitchProgressDialog v-if="switching" :progress="switchProgress" />
+
+    <!-- 通用确认弹框 -->
+    <Teleport to="body">
+      <div v-if="confirmDialog" class="fixed inset-0 z-50 flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/40" @click="confirmDialog = null"></div>
+        <div class="relative bg-white rounded-xl shadow-xl p-6 w-80 max-w-[90vw]">
+          <h3 class="text-base font-semibold text-gray-900 mb-2">{{ confirmDialog.title }}</h3>
+          <p class="text-sm text-gray-600 mb-4 whitespace-pre-wrap break-all max-h-60 overflow-y-auto">{{ confirmDialog.message }}</p>
+          <div class="flex justify-end gap-2">
+            <button
+              @click="confirmDialog = null"
+              class="px-3 py-1.5 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+            >
+              取消
+            </button>
+            <button
+              @click="confirmDialog.onConfirm()"
+              class="px-3 py-1.5 text-sm text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
+            >
+              确定
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+  </div>
+</template>
