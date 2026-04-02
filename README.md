@@ -37,6 +37,47 @@
 | Windows | `*.msi` / `*.exe` |
 | Linux | `*.deb` / `*.AppImage` |
 
+## 安装注意事项
+
+### macOS
+
+由于应用未经 Apple 签名，首次打开会提示「无法验证开发者」。解决方法：
+
+**方法一（推荐）：**
+1. 双击 `.dmg` 安装后，先尝试打开应用（会弹出警告）
+2. 打开 **系统设置 → 隐私与安全性**
+3. 滚动到底部，找到「已阻止使用 Windsurf Account Manager」提示
+4. 点击 **仍要打开** → 输入密码确认
+
+**方法二（终端命令）：**
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/Windsurf\ Account\ Manager.app
+```
+
+### Windows
+
+首次运行 `.exe` 或 `.msi` 可能弹出 **SmartScreen** 警告「Windows 已保护你的电脑」：
+1. 点击 **更多信息**
+2. 点击 **仍要运行**
+
+### Linux
+
+**`.AppImage` 文件需要添加执行权限：**
+```bash
+chmod +x Windsurf.Account.Manager_1.0.0_amd64.AppImage
+./Windsurf.Account.Manager_1.0.0_amd64.AppImage
+```
+
+**`.deb` 安装：**
+```bash
+sudo dpkg -i Windsurf.Account.Manager_1.0.0_amd64.deb
+```
+
+**`.rpm` 安装：**
+```bash
+sudo rpm -i Windsurf.Account.Manager-1.0.0-1.x86_64.rpm
+```
+
 ## 本地开发
 
 ```bash
