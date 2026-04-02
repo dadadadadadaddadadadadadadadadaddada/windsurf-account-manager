@@ -83,6 +83,14 @@ npm run tauri build
 - 无任何数据上传至远程服务器
 - 网络请求仅用于 Firebase 认证和 Windsurf 官方 API
 
+## 交流群
+
+扫码加入 QQ 群交流反馈：
+
+<img src="docs/qq-group.jpg" width="300" />
+
+**QQ群号**: 686141959
+
 ## License
 
 MIT
