@@ -8,6 +8,7 @@ const IV: [u8; 16] = [0x20u8; 16];
 const ITERATIONS: u32 = 1003;
 const KEY_LEN: usize = 16;
 
+#[allow(dead_code)]
 fn derive_key(password: &str) -> [u8; KEY_LEN] {
     let mut key = [0u8; KEY_LEN];
     pbkdf2::pbkdf2_hmac::<Sha1>(
@@ -19,6 +20,7 @@ fn derive_key(password: &str) -> [u8; KEY_LEN] {
     key
 }
 
+#[allow(dead_code)]
 fn encrypt_aes_cbc(password: &str, prefix: &[u8], data: &[u8]) -> Result<Vec<u8>, String> {
     let key = derive_key(password);
     let block_size = 16;
@@ -52,13 +54,13 @@ pub fn encrypt_sessions(sessions_json: &str) -> Result<Vec<u8>, String> {
     encrypt_aes_cbc(&password, b"v10", sessions_json.as_bytes())
 }
 
-// ---- Windows: DPAPI encryption, "v10" prefix ----
+// ---- Windows: DPAPI encryption, no version prefix (matches Chromium behavior) ----
 #[cfg(target_os = "windows")]
 pub fn encrypt_sessions(sessions_json: &str) -> Result<Vec<u8>, String> {
-    use windows::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN};
+    use windows::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
 
     let data = sessions_json.as_bytes();
-    let mut input_blob = CRYPT_INTEGER_BLOB {
+    let input_blob = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
         pbData: data.as_ptr() as *mut u8,
     };
@@ -69,22 +71,20 @@ pub fn encrypt_sessions(sessions_json: &str) -> Result<Vec<u8>, String> {
 
     unsafe {
         CryptProtectData(
-            &mut input_blob,
+            &input_blob,
             None,
             None,
             None,
             None,
-            CRYPTPROTECT_UI_FORBIDDEN,
+            0,
             &mut output_blob,
         ).map_err(|e| format!("DPAPI CryptProtectData failed: {}", e))?;
 
         let encrypted = std::slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize).to_vec();
-        windows::Win32::System::Memory::LocalFree(Some(windows::Win32::Foundation::HLOCAL(output_blob.pbData as _)));
+        let _ = windows::Win32::System::Memory::LocalFree(windows::Win32::Foundation::HLOCAL(output_blob.pbData as _));
 
-        let mut result = Vec::with_capacity(3 + encrypted.len());
-        result.extend_from_slice(b"v10");
-        result.extend_from_slice(&encrypted);
-        Ok(result)
+        // Windows DPAPI: Chromium 不加版本前缀，直接返回加密数据
+        Ok(encrypted)
     }
 }
 
