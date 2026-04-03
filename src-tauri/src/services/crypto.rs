@@ -54,15 +54,39 @@ pub fn encrypt_sessions(sessions_json: &str) -> Result<Vec<u8>, String> {
     encrypt_aes_cbc(&password, b"v10", sessions_json.as_bytes())
 }
 
-// ---- Windows: DPAPI encryption, no version prefix (matches Chromium behavior) ----
+// ---- Windows: AES-256-GCM with DPAPI-protected key from Local State (Chromium v80+) ----
 #[cfg(target_os = "windows")]
 pub fn encrypt_sessions(sessions_json: &str) -> Result<Vec<u8>, String> {
-    use windows::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
+    let key = get_os_crypt_key()?;
 
-    let data = sessions_json.as_bytes();
+    use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+    use aes_gcm::aead::Aead;
+    use rand::RngCore;
+
+    let cipher = Aes256Gcm::new((&key).into());
+
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher.encrypt(nonce, sessions_json.as_bytes())
+        .map_err(|e| format!("AES-256-GCM encryption failed: {}", e))?;
+
+    // 格式: "v10" + nonce(12 bytes) + ciphertext(含 16-byte tag)
+    let mut result = Vec::with_capacity(3 + 12 + ciphertext.len());
+    result.extend_from_slice(b"v10");
+    result.extend_from_slice(&nonce_bytes);
+    result.extend_from_slice(&ciphertext);
+    Ok(result)
+}
+
+#[cfg(target_os = "windows")]
+fn dpapi_decrypt(encrypted: &[u8]) -> Result<Vec<u8>, String> {
+    use windows::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+
     let input_blob = CRYPT_INTEGER_BLOB {
-        cbData: data.len() as u32,
-        pbData: data.as_ptr() as *mut u8,
+        cbData: encrypted.len() as u32,
+        pbData: encrypted.as_ptr() as *mut u8,
     };
     let mut output_blob = CRYPT_INTEGER_BLOB {
         cbData: 0,
@@ -70,7 +94,7 @@ pub fn encrypt_sessions(sessions_json: &str) -> Result<Vec<u8>, String> {
     };
 
     unsafe {
-        CryptProtectData(
+        CryptUnprotectData(
             &input_blob,
             None,
             None,
@@ -78,17 +102,53 @@ pub fn encrypt_sessions(sessions_json: &str) -> Result<Vec<u8>, String> {
             None,
             0,
             &mut output_blob,
-        ).map_err(|e| format!("DPAPI CryptProtectData failed: {}", e))?;
+        ).map_err(|e| format!("DPAPI CryptUnprotectData failed: {}", e))?;
 
-        let encrypted = std::slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize).to_vec();
-
-        // 直接 FFI 调用 LocalFree 释放 DPAPI 分配的内存
+        let decrypted = std::slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize).to_vec();
         extern "system" { fn LocalFree(hmem: *mut u8) -> *mut u8; }
         LocalFree(output_blob.pbData);
-
-        // Windows DPAPI: Chromium 不加版本前缀，直接返回加密数据
-        Ok(encrypted)
+        Ok(decrypted)
     }
+}
+
+#[cfg(target_os = "windows")]
+fn get_os_crypt_key() -> Result<[u8; 32], String> {
+    use base64::Engine;
+
+    // 读取 Local State 文件
+    let appdata = dirs::config_dir().ok_or("Cannot find config directory")?;
+    let local_state_path = appdata.join("Windsurf").join("Local State");
+
+    let content = std::fs::read_to_string(&local_state_path)
+        .map_err(|e| format!("Failed to read Local State ({}): {}", local_state_path.display(), e))?;
+
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse Local State: {}", e))?;
+
+    let encrypted_key_b64 = json.get("os_crypt")
+        .and_then(|v| v.get("encrypted_key"))
+        .and_then(|v| v.as_str())
+        .ok_or("os_crypt.encrypted_key not found in Local State")?;
+
+    // Base64 解码
+    let encrypted_key = base64::engine::general_purpose::STANDARD
+        .decode(encrypted_key_b64)
+        .map_err(|e| format!("Failed to base64 decode key: {}", e))?;
+
+    // 去掉 "DPAPI" 前缀 (5 bytes)
+    if encrypted_key.len() < 5 || &encrypted_key[..5] != b"DPAPI" {
+        return Err("Invalid encrypted key: missing DPAPI prefix".to_string());
+    }
+
+    // DPAPI 解密得到原始 AES-256 密钥
+    let raw_key = dpapi_decrypt(&encrypted_key[5..])?;
+    if raw_key.len() != 32 {
+        return Err(format!("Unexpected AES key length: {} (expected 32)", raw_key.len()));
+    }
+
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&raw_key);
+    Ok(key)
 }
 
 // ---- Linux: default password "peanuts" + AES-128-CBC, "v11" prefix ----
