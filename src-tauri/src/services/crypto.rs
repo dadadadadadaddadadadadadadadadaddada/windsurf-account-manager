@@ -81,7 +81,10 @@ pub fn encrypt_sessions(sessions_json: &str) -> Result<Vec<u8>, String> {
         ).map_err(|e| format!("DPAPI CryptProtectData failed: {}", e))?;
 
         let encrypted = std::slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize).to_vec();
-        let _ = windows::Win32::System::Memory::LocalFree(windows::Win32::Foundation::HLOCAL(output_blob.pbData as _));
+
+        // 直接 FFI 调用 LocalFree 释放 DPAPI 分配的内存
+        extern "system" { fn LocalFree(hmem: *mut u8) -> *mut u8; }
+        LocalFree(output_blob.pbData);
 
         // Windows DPAPI: Chromium 不加版本前缀，直接返回加密数据
         Ok(encrypted)
