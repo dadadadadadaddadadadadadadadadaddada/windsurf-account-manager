@@ -377,7 +377,11 @@ onMounted(async () => {
         GitHub
       </a>
       <span class="text-gray-300">|</span>
-      <span>QQ群: 686141959</span>
+      <span
+        class="cursor-pointer hover:text-gray-600 transition-colors"
+        title="点击复制群号"
+        @click="navigator.clipboard.writeText('686141959')"
+      >QQ群: 686141959</span>
     </footer>
 
     <!-- Dialogs -->
