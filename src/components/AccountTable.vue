@@ -97,6 +97,37 @@ function quotaTextColor(pct) {
   if (pct <= 50) return "text-orange-600";
   return "text-green-600";
 }
+
+function formatExpiresAt(timestamp) {
+  if (!timestamp || timestamp <= 0) return "-";
+  const d = new Date(timestamp * 1000);
+  const now = new Date();
+  const diffDays = Math.ceil((d - now) / (1000 * 60 * 60 * 24));
+  const dateStr = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+  if (diffDays < 0) return dateStr;
+  if (diffDays <= 3) return dateStr;
+  return dateStr;
+}
+
+function expiresColor(timestamp) {
+  if (!timestamp || timestamp <= 0) return "text-gray-400";
+  const now = Date.now() / 1000;
+  const days = (timestamp - now) / 86400;
+  if (days < 0) return "text-red-500";
+  if (days <= 3) return "text-orange-500";
+  if (days <= 7) return "text-yellow-600";
+  return "text-gray-600";
+}
+
+function expiresLabel(timestamp) {
+  if (!timestamp || timestamp <= 0) return "";
+  const now = Date.now() / 1000;
+  const days = Math.ceil((timestamp - now) / 86400);
+  if (days < 0) return `已过期${-days}天`;
+  if (days === 0) return "今天到期";
+  if (days <= 30) return `剩${days}天`;
+  return "";
+}
 </script>
 
 <template>
@@ -117,6 +148,7 @@ function quotaTextColor(pct) {
           <th class="px-4 py-3 text-left font-medium text-gray-600 w-20">类型</th>
           <th class="px-4 py-3 text-left font-medium text-gray-600 w-32">日额度</th>
           <th class="px-4 py-3 text-left font-medium text-gray-600 w-32">周额度</th>
+          <th class="px-4 py-3 text-left font-medium text-gray-600 w-28">到期日</th>
           <th class="px-4 py-3 text-right font-medium text-gray-600 w-40">操作</th>
         </tr>
       </thead>
@@ -189,6 +221,17 @@ function quotaTextColor(pct) {
             </div>
             <span v-else class="text-gray-400">-</span>
           </td>
+          <td class="px-4 py-3">
+            <div v-if="account.expires_at > 0" class="flex flex-col">
+              <span :class="['text-xs font-medium', expiresColor(account.expires_at)]">
+                {{ formatExpiresAt(account.expires_at) }}
+              </span>
+              <span v-if="expiresLabel(account.expires_at)" :class="['text-[10px]', expiresColor(account.expires_at)]">
+                {{ expiresLabel(account.expires_at) }}
+              </span>
+            </div>
+            <span v-else class="text-gray-400">-</span>
+          </td>
           <td class="px-4 py-3 text-right">
             <div class="flex items-center justify-end gap-1">
               <button
@@ -209,7 +252,7 @@ function quotaTextColor(pct) {
           </td>
         </tr>
         <tr v-if="accounts.length === 0">
-          <td colspan="7" class="px-4 py-16 text-center text-gray-400">
+          <td colspan="8" class="px-4 py-16 text-center text-gray-400">
             <div class="flex flex-col items-center gap-2">
               <svg class="w-12 h-12 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />

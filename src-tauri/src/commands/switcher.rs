@@ -51,7 +51,7 @@ pub async fn switch_account(app: AppHandle, db: State<'_, Database>, account_id:
         }
         Err(e) => {
             eprintln!("[切换] GetCurrentUser 失败(不影响主流程): {}", e);
-            if api_key.is_empty() { "Free".to_string() } else { "Pro".to_string() }
+            account.account_type.clone()
         }
     };
 
@@ -200,7 +200,7 @@ pub async fn get_account_token(db: State<'_, Database>, account_id: i64) -> Resu
         }
         Err(e) => {
             eprintln!("[获取Token] GetCurrentUser 失败(不影响主流程): {}", e);
-            if api_key.is_empty() { "Free".to_string() } else { "Pro".to_string() }
+            account.account_type.clone()
         }
     };
 
@@ -227,6 +227,7 @@ pub async fn get_account_token(db: State<'_, Database>, account_id: i64) -> Resu
                 plan.weekly_remaining,
                 plan.daily_reset_at,
                 plan.weekly_reset_at,
+                plan.expires_at,
             )?;
             eprintln!("[获取Token] 额度信息已更新: daily={}%, weekly={}%", plan.daily_remaining, plan.weekly_remaining);
         }
@@ -270,6 +271,7 @@ pub async fn refresh_plan_status(db: State<'_, Database>, account_id: i64) -> Re
         &account.email, plan_type,
         plan.daily_remaining, plan.weekly_remaining,
         plan.daily_reset_at, plan.weekly_reset_at,
+        plan.expires_at,
     )?;
     Ok(format!("{}%/{}%", plan.daily_remaining, plan.weekly_remaining))
 }

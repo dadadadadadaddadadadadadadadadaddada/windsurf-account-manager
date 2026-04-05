@@ -26,6 +26,8 @@ pub struct Account {
     pub daily_reset_at: i64,
     #[serde(default)]
     pub weekly_reset_at: i64,
+    #[serde(default)]
+    pub expires_at: i64,
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,

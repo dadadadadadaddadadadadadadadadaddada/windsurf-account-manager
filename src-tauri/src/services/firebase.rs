@@ -233,6 +233,7 @@ pub struct PlanStatus {
     pub weekly_remaining: i32,
     pub daily_reset_at: i64,
     pub weekly_reset_at: i64,
+    pub expires_at: i64,
 }
 
 fn encode_varint(mut value: u64) -> Vec<u8> {
@@ -366,6 +367,47 @@ pub async fn get_plan_status(id_token: &str) -> Result<PlanStatus, String> {
         .ok_or_else(|| "响应中未找到 PlanStatus 字段".to_string())?;
     let inner_fields = parse_protobuf_fields(inner_data);
 
+    // DEBUG: 打印所有内层 protobuf 字段（用于定位到期时间字段）
+    for (fnum, wt, data) in &inner_fields {
+        match wt {
+            0 => {
+                let mut bytes = [0u8; 8];
+                let len = data.len().min(8);
+                bytes[..len].copy_from_slice(&data[..len]);
+                let val = u64::from_le_bytes(bytes);
+                eprintln!("[protobuf] inner field {}  wire=varint  value={}", fnum, val);
+            }
+            2 => {
+                if let Ok(s) = String::from_utf8(data.clone()) {
+                    eprintln!("[protobuf] inner field {}  wire=bytes   str=\"{}\"", fnum, s);
+                } else {
+                    eprintln!("[protobuf] inner field {}  wire=bytes   len={}", fnum, data.len());
+                    // 递归解析子消息字段
+                    let sub = parse_protobuf_fields(data);
+                    for (sfnum, swt, sdata) in &sub {
+                        match swt {
+                            0 => {
+                                let mut sb = [0u8; 8];
+                                let sl = sdata.len().min(8);
+                                sb[..sl].copy_from_slice(&sdata[..sl]);
+                                eprintln!("[protobuf]   sub field {}  wire=varint  value={}", sfnum, u64::from_le_bytes(sb));
+                            }
+                            2 => {
+                                if let Ok(ss) = String::from_utf8(sdata.clone()) {
+                                    eprintln!("[protobuf]   sub field {}  wire=bytes   str=\"{}\"", sfnum, ss);
+                                } else {
+                                    eprintln!("[protobuf]   sub field {}  wire=bytes   len={}", sfnum, sdata.len());
+                                }
+                            }
+                            _ => eprintln!("[protobuf]   sub field {}  wire={}", sfnum, swt),
+                        }
+                    }
+                }
+            }
+            _ => eprintln!("[protobuf] inner field {}  wire={}", fnum, wt),
+        }
+    }
+
     // 提取 plan_name: field 1 (PlanConfig) -> field 2 (plan_name)
     let plan_name = get_submessage_field(&inner_fields, 1)
         .map(|config_data| {
@@ -379,8 +421,16 @@ pub async fn get_plan_status(id_token: &str) -> Result<PlanStatus, String> {
     let daily_reset_at = get_varint_field(&inner_fields, 17).unwrap_or(0) as i64;
     let weekly_reset_at = get_varint_field(&inner_fields, 18).unwrap_or(0) as i64;
 
-    eprintln!("[get_plan_status] plan={}, daily={}%, weekly={}%, daily_reset={}, weekly_reset={}",
-        plan_name, daily_remaining, weekly_remaining, daily_reset_at, weekly_reset_at);
+    // 到期时间: inner field 3 (submessage) -> sub field 1 (varint, unix timestamp)
+    let expires_at = get_submessage_field(&inner_fields, 3)
+        .map(|data| {
+            let sub = parse_protobuf_fields(data);
+            get_varint_field(&sub, 1).unwrap_or(0) as i64
+        })
+        .unwrap_or(0);
+
+    eprintln!("[get_plan_status] plan={}, daily={}%, weekly={}%, daily_reset={}, weekly_reset={}, expires_at={}",
+        plan_name, daily_remaining, weekly_remaining, daily_reset_at, weekly_reset_at, expires_at);
 
     Ok(PlanStatus {
         plan_name,
@@ -388,6 +438,7 @@ pub async fn get_plan_status(id_token: &str) -> Result<PlanStatus, String> {
         weekly_remaining,
         daily_reset_at,
         weekly_reset_at,
+        expires_at,
     })
 }
 

@@ -44,6 +44,7 @@ impl Database {
                 weekly_remaining INTEGER NOT NULL DEFAULT -1,
                 daily_reset_at INTEGER NOT NULL DEFAULT 0,
                 weekly_reset_at INTEGER NOT NULL DEFAULT 0,
+                expires_at INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )"
@@ -69,6 +70,7 @@ impl Database {
                     weekly_remaining INTEGER NOT NULL DEFAULT -1,
                     daily_reset_at INTEGER NOT NULL DEFAULT 0,
                     weekly_reset_at INTEGER NOT NULL DEFAULT 0,
+                    expires_at INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT (datetime('now')),
                     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
                  );
@@ -81,7 +83,18 @@ impl Database {
             ).map_err(|e| format!("Migration failed: {}", e))?;
             eprintln!("[db] 迁移完成");
         }
+        Self::migrate_add_expires_at(&conn);
         Ok(())
+    }
+
+    fn migrate_add_expires_at(conn: &Connection) {
+        let has_col: bool = conn.prepare("SELECT expires_at FROM accounts LIMIT 1").is_ok();
+        if !has_col {
+            eprintln!("[db] 添加 expires_at 列...");
+            let _ = conn.execute_batch("ALTER TABLE accounts ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0");
+        }
+        // 清理无效的 expires_at（< 2020-01-01 的非零值是脏数据）
+        let _ = conn.execute("UPDATE accounts SET expires_at = 0 WHERE expires_at > 0 AND expires_at < 1577836800", []);
     }
 
     pub fn add_account(&self, input: &AddAccountInput) -> Result<Account, String> {
@@ -117,7 +130,7 @@ impl Database {
             "SELECT id, email, password, refresh_token, id_token, id_token_expires_at,
                     api_key, name, api_server_url, account_type,
                     daily_remaining, weekly_remaining, daily_reset_at, weekly_reset_at,
-                    created_at, updated_at
+                    expires_at, created_at, updated_at
              FROM accounts WHERE email = ?1",
             params![input.email],
             |row| {
@@ -136,8 +149,9 @@ impl Database {
                     weekly_remaining: row.get(11)?,
                     daily_reset_at: row.get(12)?,
                     weekly_reset_at: row.get(13)?,
-                    created_at: row.get(14)?,
-                    updated_at: row.get(15)?,
+                    expires_at: row.get(14)?,
+                    created_at: row.get(15)?,
+                    updated_at: row.get(16)?,
                 })
             },
         ).map_err(|e| format!("Failed to get account: {}", e))
@@ -149,8 +163,8 @@ impl Database {
             "SELECT id, email, password, refresh_token, id_token, id_token_expires_at,
                     api_key, name, api_server_url, account_type,
                     daily_remaining, weekly_remaining, daily_reset_at, weekly_reset_at,
-                    created_at, updated_at
-             FROM accounts WHERE email = ?1",
+                    expires_at, created_at, updated_at
+             From accounts WHERE email = ?1",
             params![email],
             |row| {
                 Ok(Account {
@@ -168,8 +182,9 @@ impl Database {
                     weekly_remaining: row.get(11)?,
                     daily_reset_at: row.get(12)?,
                     weekly_reset_at: row.get(13)?,
-                    created_at: row.get(14)?,
-                    updated_at: row.get(15)?,
+                    expires_at: row.get(14)?,
+                    created_at: row.get(15)?,
+                    updated_at: row.get(16)?,
                 })
             },
         ).map_err(|e| format!("Failed to get account: {}", e))
@@ -181,7 +196,7 @@ impl Database {
             "SELECT id, email, password, refresh_token, id_token, id_token_expires_at,
                     api_key, name, api_server_url, account_type,
                     daily_remaining, weekly_remaining, daily_reset_at, weekly_reset_at,
-                    created_at, updated_at
+                    expires_at, created_at, updated_at
              FROM accounts ORDER BY id ASC"
         ).map_err(|e| format!("Failed to prepare query: {}", e))?;
 
@@ -201,8 +216,9 @@ impl Database {
                 weekly_remaining: row.get(11)?,
                 daily_reset_at: row.get(12)?,
                 weekly_reset_at: row.get(13)?,
-                created_at: row.get(14)?,
-                updated_at: row.get(15)?,
+                expires_at: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
             })
         }).map_err(|e| format!("Failed to query accounts: {}", e))?;
 
@@ -266,14 +282,15 @@ impl Database {
         weekly_remaining: i32,
         daily_reset_at: i64,
         weekly_reset_at: i64,
+        expires_at: i64,
     ) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
             "UPDATE accounts SET
                 account_type = ?1, daily_remaining = ?2, weekly_remaining = ?3,
-                daily_reset_at = ?4, weekly_reset_at = ?5, updated_at = datetime('now')
-             WHERE email = ?6",
-            params![account_type, daily_remaining, weekly_remaining, daily_reset_at, weekly_reset_at, email],
+                daily_reset_at = ?4, weekly_reset_at = ?5, expires_at = ?6, updated_at = datetime('now')
+             WHERE email = ?7",
+            params![account_type, daily_remaining, weekly_remaining, daily_reset_at, weekly_reset_at, expires_at, email],
         ).map_err(|e| format!("Failed to update plan status: {}", e))?;
         Ok(())
     }
