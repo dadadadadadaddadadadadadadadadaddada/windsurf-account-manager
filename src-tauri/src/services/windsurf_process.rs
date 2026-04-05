@@ -123,16 +123,17 @@ pub fn close_windsurf() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let _ = Command::new("taskkill").args(["/IM", "Windsurf.exe", "/T"]).output();
-        for _ in 0..5 {
+        // 先尝试优雅关闭（最多等 2 秒）
+        let _ = Command::new("taskkill").args(["/IM", "Windsurf.exe"]).output();
+        for _ in 0..2 {
             thread::sleep(Duration::from_secs(1));
             if !is_running() { break; }
         }
-        for name in &["Windsurf.exe", "Windsurf Helper.exe", "Windsurf Helper (GPU).exe",
-                       "Windsurf Helper (Plugin).exe", "Windsurf Helper (Renderer).exe"] {
-            let _ = Command::new("taskkill").args(["/F", "/T", "/IM", name]).output();
+        // 还在运行则强杀整个进程树（/F 强制 + /T 子进程）
+        if is_running() {
+            let _ = Command::new("taskkill").args(["/F", "/T", "/IM", "Windsurf.exe"]).output();
+            thread::sleep(Duration::from_millis(500));
         }
-        thread::sleep(Duration::from_millis(1500));
     }
 
     #[cfg(target_os = "linux")]
