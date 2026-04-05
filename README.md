@@ -4,10 +4,6 @@
 
 多账号管理与一键切换工具，支持 Windsurf 编辑器的账号快速切换、配额监控。
 
-**GitHub**: https://github.com/dadadadadadaddadadadadadadadadaddada/windsurf-account-manager
-
-**QQ交流群**: 686141959
-
 ## 功能特性
 
 - **多账号管理** — 添加、导入、导出、批量删除账号
