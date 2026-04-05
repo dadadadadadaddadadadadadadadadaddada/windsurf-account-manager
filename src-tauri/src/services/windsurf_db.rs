@@ -62,6 +62,15 @@ pub fn write_auth_data(
     let sessions_key = r#"secret://{"extensionId":"codeium.windsurf","key":"windsurf_auth.sessions"}"#;
     upsert_item(&conn, sessions_key, &encrypted_str)?;
 
+    // Step 2.5: Encrypt and write apiServerUrl
+    let url = if api_server_url.is_empty() { "https://server.self-serve.windsurf.com" } else { api_server_url };
+    let encrypted_url = crypto::encrypt_sessions(url)?;
+    let encrypted_url_value = crypto::build_encrypted_sessions_value(&encrypted_url);
+    let encrypted_url_str = serde_json::to_string(&encrypted_url_value)
+        .map_err(|e| format!("Failed to serialize encrypted apiServerUrl: {}", e))?;
+    let url_key = r#"secret://{"extensionId":"codeium.windsurf","key":"windsurf_auth.apiServerUrl"}"#;
+    upsert_item(&conn, url_key, &encrypted_url_str)?;
+
     // Step 3: Write auth status
     let auth_status = serde_json::json!({
         "name": name,
@@ -85,8 +94,13 @@ pub fn write_auth_data(
         .map_err(|e| format!("Failed to serialize codeium config: {}", e))?;
     upsert_item(&conn, "codeium.windsurf", &codeium_config_str)?;
 
-    // Step 5: Write auth name
+    // Step 5: Write auth name and user ID
     upsert_item(&conn, "codeium.windsurf-windsurf_auth", name)?;
+    upsert_item(&conn, "codeium.windsurf-windsurf_auth-", &Uuid::new_v4().to_string())?;
+
+    // Step 5.5: Write auth session entry
+    let auth_session_key = format!("windsurf_auth-{}", name);
+    upsert_item(&conn, &auth_session_key, "[]")?;
 
     // Step 6: Force WAL checkpoint and switch to rollback journal mode
     // The old Electron project uses sql.js which exports a fresh DB in rollback mode,
