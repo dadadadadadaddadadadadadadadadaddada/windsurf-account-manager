@@ -1,6 +1,12 @@
 # Windsurf Account Manager
 
+[![GitHub](https://img.shields.io/github/stars/dadadadadadaddadadadadadadadadaddada/windsurf-account-manager?style=social)](https://github.com/dadadadadadaddadadadadadadadadaddada/windsurf-account-manager)
+
 多账号管理与一键切换工具，支持 Windsurf 编辑器的账号快速切换、配额监控。
+
+**GitHub**: https://github.com/dadadadadadaddadadadadadadadadaddada/windsurf-account-manager
+
+**QQ交流群**: 686141959
 
 ## 功能特性
 
