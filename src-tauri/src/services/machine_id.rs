@@ -11,8 +11,15 @@ fn get_windsurf_storage_json_path() -> Result<PathBuf, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let appdata = dirs::config_dir().ok_or("Cannot find config directory")?;
-        Ok(appdata.join("Windsurf/User/globalStorage/storage.json"))
+        let mut candidates = Vec::new();
+        if let Some(roaming) = dirs::config_dir() {
+            candidates.push(roaming.join("Windsurf/User/globalStorage/storage.json"));
+        }
+        if let Some(local) = dirs::data_local_dir() {
+            candidates.push(local.join("Windsurf/User/globalStorage/storage.json"));
+        }
+        candidates.into_iter().find(|p| p.exists())
+            .ok_or_else(|| "Windsurf storage.json not found in Roaming or Local AppData".to_string())
     }
     #[cfg(target_os = "linux")]
     {

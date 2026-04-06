@@ -11,8 +11,15 @@ fn get_vscdb_path() -> Result<PathBuf, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let appdata = dirs::config_dir().ok_or("Cannot find config directory")?;
-        Ok(appdata.join("Windsurf/User/globalStorage/state.vscdb"))
+        let mut candidates = Vec::new();
+        if let Some(roaming) = dirs::config_dir() {
+            candidates.push(roaming.join("Windsurf/User/globalStorage/state.vscdb"));
+        }
+        if let Some(local) = dirs::data_local_dir() {
+            candidates.push(local.join("Windsurf/User/globalStorage/state.vscdb"));
+        }
+        candidates.into_iter().find(|p| p.exists())
+            .ok_or_else(|| "Windsurf state.vscdb not found in Roaming or Local AppData".to_string())
     }
     #[cfg(target_os = "linux")]
     {

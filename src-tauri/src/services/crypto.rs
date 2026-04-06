@@ -115,9 +115,17 @@ fn dpapi_decrypt(encrypted: &[u8]) -> Result<Vec<u8>, String> {
 fn get_os_crypt_key() -> Result<[u8; 32], String> {
     use base64::Engine;
 
-    // 读取 Local State 文件
-    let appdata = dirs::config_dir().ok_or("Cannot find config directory")?;
-    let local_state_path = appdata.join("Windsurf").join("Local State");
+    // 读取 Local State 文件（兼容 Roaming 和 Local 两种安装路径）
+    let mut candidates = Vec::new();
+    if let Some(roaming) = dirs::config_dir() {
+        candidates.push(roaming.join("Windsurf").join("Local State"));
+    }
+    if let Some(local) = dirs::data_local_dir() {
+        candidates.push(local.join("Windsurf").join("Local State"));
+    }
+    let local_state_path = candidates.iter().find(|p| p.exists())
+        .ok_or_else(|| format!("Local State not found, searched: {}", candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")))?
+        .clone();
 
     let content = std::fs::read_to_string(&local_state_path)
         .map_err(|e| format!("Failed to read Local State ({}): {}", local_state_path.display(), e))?;
