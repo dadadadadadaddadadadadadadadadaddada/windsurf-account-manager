@@ -79,8 +79,9 @@ pub async fn switch_account(app: AppHandle, db: State<'_, Database>, account_id:
 
     // Step 5: Launch Windsurf (blocking I/O + thread::sleep)
     emit_progress(&app, 5, total, "正在启动 Windsurf...");
-    tokio::task::spawn_blocking(|| {
-        windsurf_process::launch_windsurf()
+    let windsurf_path = db.get_setting("windsurf_path").unwrap_or(None);
+    tokio::task::spawn_blocking(move || {
+        windsurf_process::launch_windsurf(windsurf_path)
     }).await.map_err(|e| format!("spawn_blocking failed: {}", e))?.map_err(|e| e)?;
 
     Ok(format!("切换成功: {}", account.email))
@@ -281,4 +282,20 @@ pub fn check_windsurf_status() -> serde_json::Value {
     serde_json::json!({
         "running": windsurf_process::is_running()
     })
+}
+
+#[tauri::command]
+pub fn get_windsurf_path(db: State<'_, Database>) -> Result<serde_json::Value, String> {
+    let custom = db.get_setting("windsurf_path").unwrap_or(None);
+    let detected = windsurf_process::detect_windsurf_path();
+    Ok(serde_json::json!({
+        "custom": custom,
+        "detected": detected,
+        "effective": custom.as_deref().filter(|p| !p.is_empty() && std::path::Path::new(p).exists()).map(String::from).or(detected),
+    }))
+}
+
+#[tauri::command]
+pub fn set_windsurf_path(db: State<'_, Database>, path: String) -> Result<(), String> {
+    db.set_setting("windsurf_path", &path)
 }

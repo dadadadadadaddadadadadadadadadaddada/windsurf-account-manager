@@ -10,6 +10,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(db)
         .invoke_handler(tauri::generate_handler![
             commands::account::list_accounts,
@@ -22,6 +23,8 @@ pub fn run() {
             commands::switcher::get_account_token,
             commands::switcher::refresh_plan_status,
             commands::switcher::check_windsurf_status,
+            commands::switcher::get_windsurf_path,
+            commands::switcher::set_windsurf_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

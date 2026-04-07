@@ -41,6 +41,14 @@ export async function checkWindsurfStatus() {
   return await invoke("check_windsurf_status");
 }
 
+export async function getWindsurfPath() {
+  return await invoke("get_windsurf_path");
+}
+
+export async function setWindsurfPath(path) {
+  return await invoke("set_windsurf_path", { path });
+}
+
 export function onSwitchProgress(callback) {
   return listen("switch-progress", (event) => {
     callback(event.payload);

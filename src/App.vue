@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import AccountTable from "./components/AccountTable.vue";
 import AddAccountDialog from "./components/AddAccountDialog.vue";
 import SwitchProgressDialog from "./components/SwitchProgressDialog.vue";
+import SettingsDialog from "./components/SettingsDialog.vue";
 import {
   listAccounts,
   addAccount,
@@ -28,6 +29,7 @@ const gettingTokenIds = ref(new Set());
 const batchGettingToken = ref(false);
 const batchTokenProgress = ref({ done: 0, total: 0, failed: 0 });
 const confirmDialog = ref(null);
+const showSettings = ref(false);
 const batchRefreshingQuota = ref(false);
 const batchQuotaProgress = ref({ done: 0, total: 0, failed: 0 });
 
@@ -212,11 +214,16 @@ async function handleSwitch(accountId) {
       switchProgress.value = null;
     }, 1500);
   } catch (e) {
-    switchProgress.value = { step: 0, total: 5, message: "切换失败: " + e };
+    const errMsg = String(e);
+    switchProgress.value = { step: 0, total: 5, message: "切换失败: " + errMsg };
+    const isPathError = errMsg.includes("未找到 Windsurf") || errMsg.includes("手动配置安装路径");
     setTimeout(() => {
       switching.value = false;
       switchProgress.value = null;
-    }, 3000);
+      if (isPathError) {
+        showSettings.value = true;
+      }
+    }, isPathError ? 1500 : 3000);
   }
 }
 
@@ -382,6 +389,18 @@ onMounted(async () => {
         title="点击复制群号"
         @click="navigator.clipboard.writeText('686141959')"
       >QQ群: 686141959</span>
+      <span class="text-gray-300">|</span>
+      <button
+        @click="showSettings = true"
+        class="inline-flex items-center gap-1 hover:text-gray-600 transition-colors"
+        title="设置"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+        设置
+      </button>
     </footer>
 
     <!-- Dialogs -->
@@ -391,6 +410,7 @@ onMounted(async () => {
       @submit="handleAddAccount"
     />
     <SwitchProgressDialog v-if="switching" :progress="switchProgress" />
+    <SettingsDialog v-if="showSettings" @close="showSettings = false" />
 
     <!-- 通用确认弹框 -->
     <Teleport to="body">

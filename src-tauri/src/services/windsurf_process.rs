@@ -155,7 +155,40 @@ pub fn close_windsurf() -> Result<(), String> {
     }
 }
 
-pub fn launch_windsurf() -> Result<(), String> {
+/// 自动检测 Windsurf 安装路径
+pub fn detect_windsurf_path() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = dirs::home_dir().unwrap_or_default();
+        let candidates = vec![
+            "/Applications/Windsurf.app".to_string(),
+            format!("{}/Applications/Windsurf.app", home.display()),
+        ];
+        return candidates.into_iter().find(|p| std::path::Path::new(p).exists());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let local_appdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let program_files = std::env::var("PROGRAMFILES").unwrap_or_default();
+        let mut candidates = vec![
+            format!(r"{}\Programs\Windsurf\Windsurf.exe", local_appdata),
+            format!(r"{}\Windsurf\Windsurf.exe", program_files),
+        ];
+        for drive in &["C", "D", "E", "F"] {
+            candidates.push(format!(r"{}:\Program Files\Windsurf\Windsurf.exe", drive));
+        }
+        return candidates.into_iter().find(|p| std::path::Path::new(p).exists());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if Command::new("which").arg("windsurf").output().map(|o| o.status.success()).unwrap_or(false) {
+            return Some("windsurf".to_string());
+        }
+        return None;
+    }
+}
+
+pub fn launch_windsurf(custom_path: Option<String>) -> Result<(), String> {
     eprintln!("[launch_windsurf] 开始启动 Windsurf...");
 
     // 启动前确保没有残留进程（否则 macOS open 不会启动新实例）
@@ -170,50 +203,39 @@ pub fn launch_windsurf() -> Result<(), String> {
         }
     }
 
+    // 确定启动路径：用户配置 > 自动检测
+    let resolved_path = custom_path
+        .filter(|p| !p.is_empty() && std::path::Path::new(p).exists())
+        .or_else(|| detect_windsurf_path());
+
     #[cfg(target_os = "macos")]
     {
-        let home = dirs::home_dir().unwrap_or_default();
-        let possible_paths = vec![
-            "/Applications/Windsurf.app".to_string(),
-            format!("{}/Applications/Windsurf.app", home.display()),
-        ];
-        let app_path = possible_paths.iter().find(|p| std::path::Path::new(p).exists());
-        match app_path {
-            Some(path) => {
-                eprintln!("[launch_windsurf] macOS: open {}", path);
-                let output = Command::new("sh")
-                    .args(["-c", &format!("open \"{}\"", path)])
-                    .output()
-                    .map_err(|e| format!("启动失败: {}", e))?;
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(format!("open 失败: {}", stderr));
-                }
-            }
-            None => return Err(format!("未找到 Windsurf.app，已搜索: {}", possible_paths.join(", "))),
+        let app_path = resolved_path
+            .ok_or("未找到 Windsurf.app，请在设置中手动配置安装路径")?;
+        eprintln!("[launch_windsurf] macOS: open {}", app_path);
+        let output = Command::new("sh")
+            .args(["-c", &format!("open \"{}\"", app_path)])
+            .output()
+            .map_err(|e| format!("启动失败: {}", e))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("open 失败: {}", stderr));
         }
     }
 
     #[cfg(target_os = "windows")]
     {
-        let local_appdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
-        let program_files = std::env::var("PROGRAMFILES").unwrap_or_default();
-        let mut paths = vec![
-            format!(r"{}\Programs\Windsurf\Windsurf.exe", local_appdata),
-            format!(r"{}\Windsurf\Windsurf.exe", program_files),
-        ];
-        for drive in &["C", "D", "E", "F"] {
-            paths.push(format!(r"{}:\Program Files\Windsurf\Windsurf.exe", drive));
-        }
-        match paths.iter().find(|p| std::path::Path::new(p).exists()) {
-            Some(path) => { Command::new(path).spawn().map_err(|e| format!("启动失败: {}", e))?; }
-            None => return Err("未找到 Windsurf.exe".to_string()),
-        }
+        let exe_path = resolved_path
+            .ok_or("未找到 Windsurf.exe，请在设置中手动配置安装路径")?;
+        eprintln!("[launch_windsurf] Windows: {}", exe_path);
+        Command::new(&exe_path).spawn().map_err(|e| format!("启动失败: {}", e))?;
     }
 
     #[cfg(target_os = "linux")]
     {
-        Command::new("windsurf").spawn().map_err(|e| format!("启动失败: {}", e))?;
+        let bin_path = resolved_path
+            .ok_or("未找到 windsurf，请在设置中手动配置安装路径")?;
+        Command::new(&bin_path).spawn().map_err(|e| format!("启动失败: {}", e))?;
     }
 
     let max_wait = if cfg!(target_os = "macos") { 5 } else { 10 };
