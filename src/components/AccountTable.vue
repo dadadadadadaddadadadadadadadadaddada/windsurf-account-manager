@@ -4,10 +4,10 @@ import { ref, computed } from "vue";
 const props = defineProps({
   accounts: { type: Array, default: () => [] },
   selectedIds: { type: Array, default: () => [] },
-  gettingTokenIds: { type: Set, default: () => new Set() },
+  refreshingIds: { type: Set, default: () => new Set() },
 });
 
-const emit = defineEmits(["update:selectedIds", "switch", "get-token", "delete"]);
+const emit = defineEmits(["update:selectedIds", "switch", "refresh-quota", "delete"]);
 
 const copiedField = ref(null);
 const pendingDeleteAccount = ref(null);
@@ -234,6 +234,23 @@ function expiresLabel(timestamp) {
           </td>
           <td class="px-4 py-3 text-right">
             <div class="flex items-center justify-end gap-1">
+              <button
+                @click="emit('refresh-quota', account.id)"
+                :disabled="refreshingIds.has(account.id)"
+                :class="[
+                  'px-2 py-1 text-xs rounded transition-colors',
+                  refreshingIds.has(account.id)
+                    ? 'text-gray-400 cursor-not-allowed'
+                    : 'text-green-600 hover:bg-green-50',
+                ]"
+                title="刷新配额"
+              >
+                <span v-if="refreshingIds.has(account.id)" class="inline-flex items-center gap-0.5">
+                  <svg class="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                  刷新中
+                </span>
+                <span v-else>刷新</span>
+              </button>
               <button
                 @click="emit('switch', account.id)"
                 class="px-2 py-1 text-xs text-blue-600 hover:bg-blue-50 rounded transition-colors"

@@ -25,13 +25,11 @@ const showAddDialog = ref(false);
 const switching = ref(false);
 const switchProgress = ref(null);
 
-const gettingTokenIds = ref(new Set());
-const batchGettingToken = ref(false);
-const batchTokenProgress = ref({ done: 0, total: 0, failed: 0 });
+const refreshingIds = ref(new Set());
+const batchRefreshing = ref(false);
+const batchRefreshProgress = ref({ done: 0, total: 0, failed: 0 });
 const confirmDialog = ref(null);
 const showSettings = ref(false);
-const batchRefreshingQuota = ref(false);
-const batchQuotaProgress = ref({ done: 0, total: 0, failed: 0 });
 
 async function loadAccounts() {
   try {
@@ -102,28 +100,35 @@ function handleDeleteSelected() {
   };
 }
 
-async function handleGetToken(accountId) {
-  gettingTokenIds.value.add(accountId);
+async function refreshSingleAccount(id) {
   try {
-    const result = await getAccountToken(accountId);
-    console.log("获取Token结果:", result);
+    await refreshPlanStatus(id);
+    return;
+  } catch (_) {}
+  await getAccountToken(id);
+  await refreshPlanStatus(id);
+}
+
+async function handleRefreshSingle(accountId) {
+  refreshingIds.value.add(accountId);
+  try {
+    await refreshSingleAccount(accountId);
     await loadAccounts();
   } catch (e) {
-    console.error("获取Token失败:", e);
-    confirmDialog.value = { title: '获取Token失败', message: String(e), onConfirm: () => { confirmDialog.value = null; } };
+    confirmDialog.value = { title: '刷新失败', message: String(e), onConfirm: () => { confirmDialog.value = null; } };
   } finally {
-    gettingTokenIds.value.delete(accountId);
+    refreshingIds.value.delete(accountId);
   }
 }
 
-async function handleBatchGetToken() {
+async function handleBatchRefresh() {
   const ids = selectedIds.value.length > 0
     ? [...selectedIds.value]
     : accounts.value.map((a) => a.id);
   if (ids.length === 0) return;
 
-  batchGettingToken.value = true;
-  batchTokenProgress.value = { done: 0, total: ids.length, failed: 0 };
+  batchRefreshing.value = true;
+  batchRefreshProgress.value = { done: 0, total: ids.length, failed: 0 };
   const failures = [];
 
   const concurrency = 100;
@@ -135,19 +140,19 @@ async function handleBatchGetToken() {
       if (acc) idToEmail[id] = acc.email;
     }
     const results = await Promise.allSettled(
-      batch.map((id) => getAccountToken(id))
+      batch.map((id) => refreshSingleAccount(id))
     );
     for (let j = 0; j < results.length; j++) {
-      batchTokenProgress.value.done++;
+      batchRefreshProgress.value.done++;
       if (results[j].status === "rejected") {
-        batchTokenProgress.value.failed++;
+        batchRefreshProgress.value.failed++;
         failures.push(`${idToEmail[batch[j]] || batch[j]}: ${results[j].reason}`);
       }
     }
   }
 
   await loadAccounts();
-  batchGettingToken.value = false;
+  batchRefreshing.value = false;
 
   const success = ids.length - failures.length;
   let msg = `成功 ${success}/${ids.length}`;
@@ -155,52 +160,10 @@ async function handleBatchGetToken() {
     msg += `\n\n失败账号:\n${failures.join('\n')}`;
   }
   confirmDialog.value = {
-    title: '批量获取Token完成',
+    title: '刷新配额完成',
     message: msg,
     onConfirm: () => { confirmDialog.value = null; },
   };
-}
-
-async function handleBatchRefreshQuota() {
-  const ids = selectedIds.value.length > 0
-    ? [...selectedIds.value]
-    : accounts.value.map((a) => a.id);
-  if (ids.length === 0) return;
-
-  batchRefreshingQuota.value = true;
-  batchQuotaProgress.value = { done: 0, total: ids.length, failed: 0 };
-  const failures = [];
-
-  const concurrency = 100;
-  for (let i = 0; i < ids.length; i += concurrency) {
-    const batch = ids.slice(i, i + concurrency);
-    const idToEmail = {};
-    for (const id of batch) {
-      const acc = accounts.value.find((a) => a.id === id);
-      if (acc) idToEmail[id] = acc.email;
-    }
-    const results = await Promise.allSettled(
-      batch.map((id) => refreshPlanStatus(id))
-    );
-    for (let j = 0; j < results.length; j++) {
-      batchQuotaProgress.value.done++;
-      if (results[j].status === "rejected") {
-        batchQuotaProgress.value.failed++;
-        failures.push(`${idToEmail[batch[j]] || batch[j]}: ${results[j].reason}`);
-      }
-    }
-  }
-
-  await loadAccounts();
-  batchRefreshingQuota.value = false;
-
-  if (failures.length > 0) {
-    confirmDialog.value = {
-      title: '刷新配额完成',
-      message: `成功 ${ids.length - failures.length}/${ids.length}\n\n失败:\n${failures.join('\n')}`,
-      onConfirm: () => { confirmDialog.value = null; },
-    };
-  }
 }
 
 async function handleSwitch(accountId) {
@@ -251,42 +214,21 @@ onMounted(async () => {
         </div>
         <div class="flex items-center gap-2">
           <button
-            @click="handleBatchGetToken"
-            :disabled="batchGettingToken"
+            @click="handleBatchRefresh"
+            :disabled="batchRefreshing"
             :class="[
               'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors',
-              batchGettingToken
+              batchRefreshing
                 ? 'border-gray-200 text-gray-400 cursor-not-allowed'
                 : 'border-green-300 text-green-700 hover:bg-green-50',
             ]"
           >
-            <svg class="w-4 h-4" :class="{ 'animate-spin': batchGettingToken }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-4 h-4" :class="{ 'animate-spin': batchRefreshing }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            <template v-if="batchGettingToken">
-              {{ batchTokenProgress.done }}/{{ batchTokenProgress.total }}
-              <span v-if="batchTokenProgress.failed" class="text-red-500">({{ batchTokenProgress.failed }}失败)</span>
-            </template>
-            <template v-else>
-              批量获取Token{{ selectedIds.length > 0 ? ` (${selectedIds.length})` : '' }}
-            </template>
-          </button>
-          <button
-            @click="handleBatchRefreshQuota"
-            :disabled="batchRefreshingQuota"
-            :class="[
-              'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors',
-              batchRefreshingQuota
-                ? 'border-gray-200 text-gray-400 cursor-not-allowed'
-                : 'border-purple-300 text-purple-700 hover:bg-purple-50',
-            ]"
-          >
-            <svg class="w-4 h-4" :class="{ 'animate-spin': batchRefreshingQuota }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
-            <template v-if="batchRefreshingQuota">
-              {{ batchQuotaProgress.done }}/{{ batchQuotaProgress.total }}
-              <span v-if="batchQuotaProgress.failed" class="text-red-500">({{ batchQuotaProgress.failed }}失败)</span>
+            <template v-if="batchRefreshing">
+              {{ batchRefreshProgress.done }}/{{ batchRefreshProgress.total }}
+              <span v-if="batchRefreshProgress.failed" class="text-red-500">({{ batchRefreshProgress.failed }}失败)</span>
             </template>
             <template v-else>
               刷新配额{{ selectedIds.length > 0 ? ` (${selectedIds.length})` : '' }}
@@ -363,10 +305,10 @@ onMounted(async () => {
     <main class="flex-1 overflow-auto">
       <AccountTable
         :accounts="filteredAccounts"
-        :gettingTokenIds="gettingTokenIds"
+        :refreshingIds="refreshingIds"
         v-model:selectedIds="selectedIds"
         @switch="handleSwitch"
-        @get-token="handleGetToken"
+        @refresh-quota="handleRefreshSingle"
         @delete="(id) => { deleteAccounts([id]).then(loadAccounts); }"
       />
     </main>
