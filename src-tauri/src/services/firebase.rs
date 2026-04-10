@@ -115,6 +115,8 @@ pub async fn refresh_firebase_token(refresh_token: &str) -> Result<RefreshTokenR
         .post(&url)
         .header("Content-Type", "application/json")
         .header("User-Agent", USER_AGENT)
+        .header("Origin", "https://windsurf.com")
+        .header("Referer", "https://windsurf.com/")
         .json(&RefreshTokenRequest {
             grant_type: "refresh_token".to_string(),
             refresh_token: refresh_token.to_string(),
@@ -168,6 +170,9 @@ pub async fn login_with_email_password(email: &str, password: &str) -> Result<Lo
         .post(&url)
         .header("Content-Type", "application/json")
         .header("User-Agent", USER_AGENT)
+        .header("Origin", "https://windsurf.com")
+        .header("Referer", "https://windsurf.com/")
+        .header("x-client-version", "Chrome/JsCore/11.0.0/FirebaseCore-web")
         .json(&LoginRequest {
             email: email.to_string(),
             password: password.to_string(),
@@ -207,6 +212,8 @@ pub async fn get_current_user(id_token: &str) -> Result<GetCurrentUserResponse, 
         .header("Content-Type", "application/json")
         .header("Connect-Protocol-Version", "1")
         .header("User-Agent", USER_AGENT)
+        .header("Origin", "https://windsurf.com")
+        .header("Referer", "https://windsurf.com/")
         .json(&GetCurrentUserRequest {
             auth_token: id_token.to_string(),
         })
@@ -449,6 +456,8 @@ pub async fn register_user(id_token: &str) -> Result<RegisterUserResponseRaw, St
         .post(REGISTER_USER_URL)
         .header("Content-Type", "application/json")
         .header("User-Agent", USER_AGENT)
+        .header("Origin", "https://windsurf.com")
+        .header("Referer", "https://windsurf.com/")
         .json(&RegisterUserRequest {
             firebase_id_token: id_token.to_string(),
         })

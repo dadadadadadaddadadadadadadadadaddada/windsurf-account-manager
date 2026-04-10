@@ -5,6 +5,7 @@ import AccountTable from "./components/AccountTable.vue";
 import AddAccountDialog from "./components/AddAccountDialog.vue";
 import SwitchProgressDialog from "./components/SwitchProgressDialog.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
+import UpdateDialog from "./components/UpdateDialog.vue";
 import {
   listAccounts,
   addAccount,
@@ -12,6 +13,7 @@ import {
   switchAccount,
   getAccountToken,
   refreshPlanStatus,
+  checkUpdate,
   onSwitchProgress,
 } from "./lib/tauri";
 
@@ -30,6 +32,7 @@ const batchRefreshing = ref(false);
 const batchRefreshProgress = ref({ done: 0, total: 0, failed: 0 });
 const confirmDialog = ref(null);
 const showSettings = ref(false);
+const updateInfo = ref(null);
 
 async function loadAccounts() {
   try {
@@ -190,11 +193,35 @@ async function handleSwitch(accountId) {
   }
 }
 
+async function handleCheckUpdate(manual = false) {
+  try {
+    const info = await checkUpdate();
+    if (info.has_update) {
+      updateInfo.value = info;
+    } else if (manual) {
+      confirmDialog.value = {
+        title: '检查更新',
+        message: `当前已是最新版本 (v${info.current_version})`,
+        onConfirm: () => { confirmDialog.value = null; },
+      };
+    }
+  } catch (e) {
+    if (manual) {
+      confirmDialog.value = {
+        title: '检查更新失败',
+        message: String(e),
+        onConfirm: () => { confirmDialog.value = null; },
+      };
+    }
+  }
+}
+
 onMounted(async () => {
   await loadAccounts();
   onSwitchProgress((progress) => {
     switchProgress.value = progress;
   });
+  handleCheckUpdate(false);
 });
 </script>
 
@@ -343,6 +370,17 @@ onMounted(async () => {
         </svg>
         设置
       </button>
+      <span class="text-gray-300">|</span>
+      <button
+        @click="handleCheckUpdate(true)"
+        class="inline-flex items-center gap-1 hover:text-gray-600 transition-colors"
+        title="检查更新"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+        </svg>
+        检查更新
+      </button>
     </footer>
 
     <!-- Dialogs -->
@@ -353,6 +391,7 @@ onMounted(async () => {
     />
     <SwitchProgressDialog v-if="switching" :progress="switchProgress" />
     <SettingsDialog v-if="showSettings" @close="showSettings = false" />
+    <UpdateDialog v-if="updateInfo" :info="updateInfo" @close="updateInfo = null" />
 
     <!-- 通用确认弹框 -->
     <Teleport to="body">

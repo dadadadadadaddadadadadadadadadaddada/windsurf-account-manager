@@ -299,3 +299,37 @@ pub fn get_windsurf_path(db: State<'_, Database>) -> Result<serde_json::Value, S
 pub fn set_windsurf_path(db: State<'_, Database>, path: String) -> Result<(), String> {
     db.set_setting("windsurf_path", &path)
 }
+
+#[tauri::command]
+pub async fn check_update(app: AppHandle) -> Result<serde_json::Value, String> {
+    let current_version = app.config().version.clone().unwrap_or_default();
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("创建HTTP客户端失败: {}", e))?;
+
+    let resp = client
+        .get("https://adminabc.xiaobiao.ltd/api/app-versions/check/windsurf")
+        .send()
+        .await
+        .map_err(|e| format!("检查更新失败: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("检查更新失败 ({})", resp.status()));
+    }
+
+    let body: serde_json::Value = resp.json().await
+        .map_err(|e| format!("解析更新响应失败: {}", e))?;
+
+    let remote_version = body["data"]["version"].as_str().unwrap_or("").to_string();
+    let has_update = !remote_version.is_empty() && remote_version != current_version;
+
+    Ok(serde_json::json!({
+        "has_update": has_update,
+        "current_version": current_version,
+        "remote_version": remote_version,
+        "update_content": body["data"]["update_content"].as_str().unwrap_or(""),
+        "download_url": body["data"]["download_url"].as_str().unwrap_or(""),
+    }))
+}
