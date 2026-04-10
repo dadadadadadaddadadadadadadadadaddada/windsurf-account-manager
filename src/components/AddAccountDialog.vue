@@ -11,6 +11,10 @@ const parsedAccounts = computed(() => {
     .map((l) => l.trim())
     .filter((l) => l);
   return lines.map((line) => {
+    // 格式1: 账号: xxx 密码: xxx
+    const cnMatch = line.match(/账号[:：]\s*(\S+)\s+密码[:：]\s*(\S+)/);
+    if (cnMatch) return { email: cnMatch[1], password: cnMatch[2] };
+    // 格式2: email----password
     const parts = line.split("----");
     const email = parts[0].trim();
     const password = parts.length > 1 ? parts[1].trim() : email;
