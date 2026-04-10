@@ -323,7 +323,12 @@ pub async fn check_update(app: AppHandle) -> Result<serde_json::Value, String> {
         .map_err(|e| format!("解析更新响应失败: {}", e))?;
 
     let remote_version = body["data"]["version"].as_str().unwrap_or("").to_string();
-    let has_update = !remote_version.is_empty() && remote_version != current_version;
+    let normalize_ver = |v: &str| -> Vec<u64> {
+        v.trim_start_matches('v').split('.').filter_map(|s| s.parse().ok()).collect()
+    };
+    let remote_parts = normalize_ver(&remote_version);
+    let current_parts = normalize_ver(&current_version);
+    let has_update = !remote_parts.is_empty() && remote_parts > current_parts;
 
     Ok(serde_json::json!({
         "has_update": has_update,
