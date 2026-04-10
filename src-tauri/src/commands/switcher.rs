@@ -84,7 +84,13 @@ pub async fn switch_account(app: AppHandle, db: State<'_, Database>, account_id:
         windsurf_process::launch_windsurf(windsurf_path)
     }).await.map_err(|e| format!("spawn_blocking failed: {}", e))?.map_err(|e| e)?;
 
+    let _ = db.set_setting("active_account_email", &account.email);
     Ok(format!("切换成功: {}", account.email))
+}
+
+#[tauri::command]
+pub fn get_active_account(db: State<'_, Database>) -> Result<Option<String>, String> {
+    db.get_setting("active_account_email")
 }
 
 /// 获取 Firebase idToken（优先 refresh_token，降级到邮箱密码登录）

@@ -14,6 +14,7 @@ import {
   getAccountToken,
   refreshPlanStatus,
   checkUpdate,
+  getActiveAccount,
   onSwitchProgress,
 } from "./lib/tauri";
 
@@ -33,6 +34,7 @@ const batchRefreshProgress = ref({ done: 0, total: 0, failed: 0 });
 const confirmDialog = ref(null);
 const showSettings = ref(false);
 const updateInfo = ref(null);
+const activeEmail = ref(null);
 
 async function loadAccounts() {
   try {
@@ -175,6 +177,8 @@ async function handleSwitch(accountId) {
   try {
     await switchAccount(accountId);
     switchProgress.value = { step: 5, total: 5, message: "切换完成!" };
+    const acc = accounts.value.find((a) => a.id === accountId);
+    if (acc) activeEmail.value = acc.email;
     setTimeout(() => {
       switching.value = false;
       switchProgress.value = null;
@@ -222,7 +226,8 @@ onMounted(async () => {
     switchProgress.value = progress;
   });
   handleCheckUpdate(false);
-});
+  try { activeEmail.value = await getActiveAccount(); } catch (_) {}
+})
 </script>
 
 <template>
@@ -333,6 +338,7 @@ onMounted(async () => {
       <AccountTable
         :accounts="filteredAccounts"
         :refreshingIds="refreshingIds"
+        :activeEmail="activeEmail"
         v-model:selectedIds="selectedIds"
         @switch="handleSwitch"
         @refresh-quota="handleRefreshSingle"

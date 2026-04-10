@@ -49,6 +49,10 @@ export async function setWindsurfPath(path) {
   return await invoke("set_windsurf_path", { path });
 }
 
+export async function getActiveAccount() {
+  return await invoke("get_active_account");
+}
+
 export async function checkUpdate() {
   return await invoke("check_update");
 }

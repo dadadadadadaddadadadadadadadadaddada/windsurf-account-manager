@@ -26,6 +26,7 @@ pub fn run() {
             commands::switcher::get_windsurf_path,
             commands::switcher::set_windsurf_path,
             commands::switcher::check_update,
+            commands::switcher::get_active_account,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

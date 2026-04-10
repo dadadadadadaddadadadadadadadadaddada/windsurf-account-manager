@@ -5,6 +5,7 @@ const props = defineProps({
   accounts: { type: Array, default: () => [] },
   selectedIds: { type: Array, default: () => [] },
   refreshingIds: { type: Set, default: () => new Set() },
+  activeEmail: { type: String, default: null },
 });
 
 const emit = defineEmits(["update:selectedIds", "switch", "refresh-quota", "delete"]);
@@ -156,8 +157,14 @@ function expiresLabel(timestamp) {
         <tr
           v-for="account in accounts"
           :key="account.id"
-          class="border-b border-gray-100 hover:bg-blue-50/30 transition-colors"
-          :class="{ 'bg-blue-50/50': isSelected(account.id) }"
+          class="border-b border-gray-100 transition-colors"
+          :class="[
+            account.email === activeEmail
+              ? 'bg-green-50 hover:bg-green-100/70'
+              : isSelected(account.id)
+                ? 'bg-blue-50/50 hover:bg-blue-50/30'
+                : 'hover:bg-blue-50/30'
+          ]"
         >
           <td class="px-4 py-3">
             <input
@@ -168,14 +175,23 @@ function expiresLabel(timestamp) {
             />
           </td>
           <td class="px-4 py-3">
-            <span
-              @click="copyText(account.email, 'email-' + account.id)"
-              class="font-mono text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
-              title="点击复制"
-            >
-              {{ account.email }}
-              <span v-if="copiedField === 'email-' + account.id" class="ml-1 text-xs text-green-500">已复制</span>
-            </span>
+            <div class="flex items-center gap-2">
+              <span
+                @click="copyText(account.email, 'email-' + account.id)"
+                class="font-mono text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
+                title="点击复制"
+              >
+                {{ account.email }}
+                <span v-if="copiedField === 'email-' + account.id" class="ml-1 text-xs text-green-500">已复制</span>
+              </span>
+              <span
+                v-if="account.email === activeEmail"
+                class="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium text-green-700 bg-green-100 border border-green-200 rounded-full shrink-0"
+              >
+                <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3"/></svg>
+                使用中
+              </span>
+            </div>
           </td>
           <td class="px-4 py-3">
             <span
