@@ -6,6 +6,7 @@ const props = defineProps({
   selectedIds: { type: Array, default: () => [] },
   refreshingIds: { type: Set, default: () => new Set() },
   activeEmail: { type: String, default: null },
+  enableGroups: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["update:selectedIds", "switch", "refresh-quota", "delete"]);
@@ -160,7 +161,7 @@ function expiresLabel(timestamp) {
           class="border-b border-gray-100 transition-colors"
           :class="[
             account.email === activeEmail
-              ? 'bg-green-50 hover:bg-green-100/70'
+              ? 'bg-green-100 hover:bg-green-200/80'
               : isSelected(account.id)
                 ? 'bg-blue-50/50 hover:bg-blue-50/30'
                 : 'hover:bg-blue-50/30'
@@ -190,6 +191,12 @@ function expiresLabel(timestamp) {
               >
                 <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3"/></svg>
                 使用中
+              </span>
+              <span
+                v-if="enableGroups && account.group_name"
+                class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-full shrink-0"
+              >
+                {{ account.group_name }}
               </span>
             </div>
           </td>

@@ -42,3 +42,38 @@ pub fn get_account_stats(db: State<'_, Database>) -> Result<serde_json::Value, S
         "unknown": unknown
     }))
 }
+
+#[tauri::command]
+pub fn get_setting(db: State<'_, Database>, key: String) -> Result<Option<String>, String> {
+    db.get_setting(&key)
+}
+
+#[tauri::command]
+pub fn set_setting(db: State<'_, Database>, key: String, value: String) -> Result<(), String> {
+    db.set_setting(&key, &value)
+}
+
+#[tauri::command]
+pub fn create_group(db: State<'_, Database>, name: String) -> Result<(), String> {
+    db.create_group(&name)
+}
+
+#[tauri::command]
+pub fn list_groups(db: State<'_, Database>) -> Result<Vec<String>, String> {
+    db.list_groups()
+}
+
+#[tauri::command]
+pub fn set_accounts_group(db: State<'_, Database>, ids: Vec<i64>, group_name: String) -> Result<usize, String> {
+    db.set_accounts_group(&ids, &group_name)
+}
+
+#[tauri::command]
+pub fn rename_group(db: State<'_, Database>, old_name: String, new_name: String) -> Result<usize, String> {
+    db.rename_group(&old_name, &new_name)
+}
+
+#[tauri::command]
+pub fn delete_group(db: State<'_, Database>, group_name: String) -> Result<usize, String> {
+    db.delete_group(&group_name)
+}

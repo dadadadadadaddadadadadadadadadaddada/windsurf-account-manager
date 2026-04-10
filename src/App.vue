@@ -6,6 +6,8 @@ import AddAccountDialog from "./components/AddAccountDialog.vue";
 import SwitchProgressDialog from "./components/SwitchProgressDialog.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import UpdateDialog from "./components/UpdateDialog.vue";
+import SetGroupDialog from "./components/SetGroupDialog.vue";
+import GroupManagerDialog from "./components/GroupManagerDialog.vue";
 import {
   listAccounts,
   addAccount,
@@ -15,6 +17,8 @@ import {
   refreshPlanStatus,
   checkUpdate,
   getActiveAccount,
+  getSetting,
+  listGroups,
   onSwitchProgress,
 } from "./lib/tauri";
 
@@ -35,6 +39,15 @@ const confirmDialog = ref(null);
 const showSettings = ref(false);
 const updateInfo = ref(null);
 const activeEmail = ref(null);
+const enableGroups = ref(false);
+const groups = ref([]);
+const filterGroup = ref("all");
+const showSetGroup = ref(false);
+const showGroupManager = ref(false);
+
+async function loadGroups() {
+  try { groups.value = await listGroups(); } catch (_) {}
+}
 
 async function loadAccounts() {
   try {
@@ -66,6 +79,13 @@ function updateFilteredAccounts() {
       (a) => a.account_type.toLowerCase() === filterType.value.toLowerCase()
     );
   }
+  if (enableGroups.value && filterGroup.value !== "all") {
+    if (filterGroup.value === "__ungrouped__") {
+      result = result.filter((a) => !a.group_name);
+    } else {
+      result = result.filter((a) => a.group_name === filterGroup.value);
+    }
+  }
   if (searchQuery.value) {
     const q = searchQuery.value.toLowerCase();
     result = result.filter((a) => a.email.toLowerCase().includes(q));
@@ -73,7 +93,7 @@ function updateFilteredAccounts() {
   filteredAccounts.value = result;
 }
 
-watch([accounts, searchQuery, filterType], updateFilteredAccounts, {
+watch([accounts, searchQuery, filterType, filterGroup, enableGroups], updateFilteredAccounts, {
   immediate: true,
 });
 
@@ -227,6 +247,11 @@ onMounted(async () => {
   });
   handleCheckUpdate(false);
   try { activeEmail.value = await getActiveAccount(); } catch (_) {}
+  try {
+    const v = await getSetting("enable_groups");
+    enableGroups.value = v === "true";
+    if (enableGroups.value) await loadGroups();
+  } catch (_) {}
 })
 </script>
 
@@ -294,6 +319,16 @@ onMounted(async () => {
             </svg>
             购买账号
           </button>
+          <button
+            v-if="enableGroups && selectedIds.length > 0"
+            @click="showSetGroup = true"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm border border-purple-300 text-purple-700 hover:bg-purple-50 rounded-lg transition-colors"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+            </svg>
+            设置分组 ({{ selectedIds.length }})
+          </button>
         </div>
       </div>
 
@@ -330,6 +365,29 @@ onMounted(async () => {
             {{ t.label }}
           </button>
         </div>
+
+        <!-- Group filter -->
+        <template v-if="enableGroups">
+          <span class="text-gray-300">|</span>
+          <select
+            v-model="filterGroup"
+            class="px-3 py-1 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+          >
+            <option value="all">全部分组</option>
+            <option value="__ungrouped__">未分组</option>
+            <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
+          </select>
+          <button
+            @click="showGroupManager = true"
+            class="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+            title="管理分组"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
+        </template>
       </div>
     </header>
 
@@ -339,6 +397,7 @@ onMounted(async () => {
         :accounts="filteredAccounts"
         :refreshingIds="refreshingIds"
         :activeEmail="activeEmail"
+        :enableGroups="enableGroups"
         v-model:selectedIds="selectedIds"
         @switch="handleSwitch"
         @refresh-quota="handleRefreshSingle"
@@ -396,8 +455,25 @@ onMounted(async () => {
       @submit="handleAddAccount"
     />
     <SwitchProgressDialog v-if="switching" :progress="switchProgress" />
-    <SettingsDialog v-if="showSettings" @close="showSettings = false" />
+    <SettingsDialog
+      v-if="showSettings"
+      :enableGroups="enableGroups"
+      @close="showSettings = false"
+      @update:enableGroups="(v) => { enableGroups = v; if (v) loadGroups(); }"
+      @groupsChanged="loadGroups(); loadAccounts();"
+    />
     <UpdateDialog v-if="updateInfo" :info="updateInfo" @close="updateInfo = null" />
+    <SetGroupDialog
+      v-if="showSetGroup"
+      :ids="selectedIds"
+      @close="showSetGroup = false"
+      @done="showSetGroup = false; loadAccounts(); loadGroups();"
+    />
+    <GroupManagerDialog
+      v-if="showGroupManager"
+      @close="showGroupManager = false"
+      @done="loadAccounts(); loadGroups();"
+    />
 
     <!-- 通用确认弹框 -->
     <Teleport to="body">

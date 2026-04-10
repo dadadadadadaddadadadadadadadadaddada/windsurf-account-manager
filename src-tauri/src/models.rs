@@ -31,6 +31,8 @@ pub struct Account {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+    #[serde(default)]
+    pub group_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +52,8 @@ pub struct AddAccountInput {
     pub api_server_url: String,
     #[serde(default)]
     pub account_type: String,
+    #[serde(default)]
+    pub group_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -33,6 +33,9 @@ impl Database {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS account_groups (
+                name TEXT PRIMARY KEY
+            );
             CREATE TABLE IF NOT EXISTS accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT NOT NULL UNIQUE,
@@ -88,6 +91,7 @@ impl Database {
             eprintln!("[db] 迁移完成");
         }
         Self::migrate_add_expires_at(&conn);
+        Self::migrate_add_group_name(&conn);
         Ok(())
     }
 
@@ -99,6 +103,14 @@ impl Database {
         }
         // 清理无效的 expires_at（< 2020-01-01 的非零值是脏数据）
         let _ = conn.execute("UPDATE accounts SET expires_at = 0 WHERE expires_at > 0 AND expires_at < 1577836800", []);
+    }
+
+    fn migrate_add_group_name(conn: &Connection) {
+        let has_col: bool = conn.prepare("SELECT group_name FROM accounts LIMIT 1").is_ok();
+        if !has_col {
+            eprintln!("[db] 添加 group_name 列...");
+            let _ = conn.execute_batch("ALTER TABLE accounts ADD COLUMN group_name TEXT NOT NULL DEFAULT ''");
+        }
     }
 
     pub fn add_account(&self, input: &AddAccountInput) -> Result<Account, String> {
@@ -134,7 +146,7 @@ impl Database {
             "SELECT id, email, password, refresh_token, id_token, id_token_expires_at,
                     api_key, name, api_server_url, account_type,
                     daily_remaining, weekly_remaining, daily_reset_at, weekly_reset_at,
-                    expires_at, created_at, updated_at
+                    expires_at, created_at, updated_at, group_name
              FROM accounts WHERE email = ?1",
             params![input.email],
             |row| {
@@ -156,6 +168,7 @@ impl Database {
                     expires_at: row.get(14)?,
                     created_at: row.get(15)?,
                     updated_at: row.get(16)?,
+                    group_name: row.get(17)?,
                 })
             },
         ).map_err(|e| format!("Failed to get account: {}", e))
@@ -167,8 +180,8 @@ impl Database {
             "SELECT id, email, password, refresh_token, id_token, id_token_expires_at,
                     api_key, name, api_server_url, account_type,
                     daily_remaining, weekly_remaining, daily_reset_at, weekly_reset_at,
-                    expires_at, created_at, updated_at
-             From accounts WHERE email = ?1",
+                    expires_at, created_at, updated_at, group_name
+             FROM accounts WHERE email = ?1",
             params![email],
             |row| {
                 Ok(Account {
@@ -189,6 +202,7 @@ impl Database {
                     expires_at: row.get(14)?,
                     created_at: row.get(15)?,
                     updated_at: row.get(16)?,
+                    group_name: row.get(17)?,
                 })
             },
         ).map_err(|e| format!("Failed to get account: {}", e))
@@ -200,7 +214,7 @@ impl Database {
             "SELECT id, email, password, refresh_token, id_token, id_token_expires_at,
                     api_key, name, api_server_url, account_type,
                     daily_remaining, weekly_remaining, daily_reset_at, weekly_reset_at,
-                    expires_at, created_at, updated_at
+                    expires_at, created_at, updated_at, group_name
              FROM accounts ORDER BY id ASC"
         ).map_err(|e| format!("Failed to prepare query: {}", e))?;
 
@@ -223,6 +237,7 @@ impl Database {
                 expires_at: row.get(14)?,
                 created_at: row.get(15)?,
                 updated_at: row.get(16)?,
+                group_name: row.get(17)?,
             })
         }).map_err(|e| format!("Failed to query accounts: {}", e))?;
 
@@ -335,5 +350,71 @@ impl Database {
             params![account_type],
             |row| row.get(0),
         ).map_err(|e| format!("Failed to count accounts by type: {}", e))
+    }
+
+    pub fn create_group(&self, name: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT OR IGNORE INTO account_groups (name) VALUES (?1)",
+            params![name],
+        ).map_err(|e| format!("Failed to create group: {}", e))?;
+        Ok(())
+    }
+
+    pub fn list_groups(&self) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT name FROM account_groups ORDER BY name ASC"
+        ).map_err(|e| format!("Failed to list groups: {}", e))?;
+        let groups = stmt.query_map([], |row| row.get(0))
+            .map_err(|e| format!("Failed to query groups: {}", e))?;
+        let mut result = Vec::new();
+        for g in groups {
+            result.push(g.map_err(|e| format!("Failed to read group: {}", e))?);
+        }
+        Ok(result)
+    }
+
+    pub fn set_accounts_group(&self, ids: &[i64], group_name: &str) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "UPDATE accounts SET group_name = ?1, updated_at = datetime('now') WHERE id IN ({})",
+            placeholders.join(",")
+        );
+        let mut p: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(group_name.to_string())];
+        for id in ids {
+            p.push(Box::new(*id));
+        }
+        let refs: Vec<&dyn rusqlite::types::ToSql> = p.iter().map(|v| v.as_ref()).collect();
+        let updated = conn.execute(&sql, refs.as_slice())
+            .map_err(|e| format!("Failed to set group: {}", e))?;
+        Ok(updated)
+    }
+
+    pub fn rename_group(&self, old_name: &str, new_name: &str) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE account_groups SET name = ?1 WHERE name = ?2",
+            params![new_name, old_name],
+        ).map_err(|e| format!("Failed to rename group in groups table: {}", e))?;
+        let updated = conn.execute(
+            "UPDATE accounts SET group_name = ?1, updated_at = datetime('now') WHERE group_name = ?2",
+            params![new_name, old_name],
+        ).map_err(|e| format!("Failed to rename group: {}", e))?;
+        Ok(updated)
+    }
+
+    pub fn delete_group(&self, group_name: &str) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM account_groups WHERE name = ?1",
+            params![group_name],
+        ).map_err(|e| format!("Failed to delete group from groups table: {}", e))?;
+        let updated = conn.execute(
+            "UPDATE accounts SET group_name = '', updated_at = datetime('now') WHERE group_name = ?1",
+            params![group_name],
+        ).map_err(|e| format!("Failed to delete group: {}", e))?;
+        Ok(updated)
     }
 }

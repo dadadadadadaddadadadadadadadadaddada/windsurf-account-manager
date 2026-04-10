@@ -53,6 +53,34 @@ export async function getActiveAccount() {
   return await invoke("get_active_account");
 }
 
+export async function getSetting(key) {
+  return await invoke("get_setting", { key });
+}
+
+export async function setSetting(key, value) {
+  return await invoke("set_setting", { key, value });
+}
+
+export async function createGroup(name) {
+  return await invoke("create_group", { name });
+}
+
+export async function listGroups() {
+  return await invoke("list_groups");
+}
+
+export async function setAccountsGroup(ids, groupName) {
+  return await invoke("set_accounts_group", { ids, groupName });
+}
+
+export async function renameGroup(oldName, newName) {
+  return await invoke("rename_group", { oldName, newName });
+}
+
+export async function deleteGroup(groupName) {
+  return await invoke("delete_group", { groupName });
+}
+
 export async function checkUpdate() {
   return await invoke("check_update");
 }
