@@ -142,9 +142,7 @@ async fn get_firebase_token(account: &crate::models::Account) -> Result<(String,
 }
 
 async fn get_credentials(account: &crate::models::Account) -> Result<(String, String, String, String, String), String> {
-    let (id_token, refresh_token) = get_firebase_token(account).await?;
-
-    // 如果已有完整凭证且 apiKey 有效，直接复用
+    // 已有完整凭证 → 直接复用，不走 Firebase
     let has_full_credentials = !account.api_key.is_empty()
         && !account.name.is_empty()
         && !account.api_server_url.is_empty();
@@ -154,12 +152,13 @@ async fn get_credentials(account: &crate::models::Account) -> Result<(String, St
             account.api_key.clone(),
             account.name.clone(),
             account.api_server_url.clone(),
-            id_token,
-            refresh_token,
+            account.id_token.clone(),
+            account.refresh_token.clone(),
         ));
     }
 
-    // 否则调用 RegisterUser 获取 apiKey / name / apiServerUrl
+    // 无 apiKey → 必须通过 Firebase + RegisterUser 获取
+    let (id_token, refresh_token) = get_firebase_token(account).await?;
     let register_resp = firebase::register_user(&id_token).await?;
 
     Ok((
