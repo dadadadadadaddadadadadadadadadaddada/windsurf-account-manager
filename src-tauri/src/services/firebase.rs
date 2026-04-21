@@ -9,8 +9,11 @@ const FIREBASE_LOGIN_URL: &str = "https://identitytoolkit.googleapis.com/v1/acco
 const REGISTER_USER_URL: &str = "https://register.windsurf.com/exa.seat_management_pb.SeatManagementService/RegisterUser";
 const GET_CURRENT_USER_URL: &str = "https://windsurf.com/_backend/exa.seat_management_pb.SeatManagementService/GetCurrentUser";
 const GET_PLAN_STATUS_URL: &str = "https://windsurf.com/_backend/exa.seat_management_pb.SeatManagementService/GetPlanStatus";
+const DEVIN_AUTH_LOGIN_URL: &str = "https://windsurf.com/_devin-auth/password/login";
+const DEFAULT_API_SERVER_URL: &str = "https://server.self-serve.windsurf.com";
 const REQUEST_TIMEOUT: u64 = 30;
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+const CONNECT_USER_AGENT: &str = "connect-es/1.6.1";
 
 fn build_client() -> Result<Client, String> {
     Client::builder()
@@ -74,22 +77,21 @@ pub struct RegisterUserResponseRaw {
     pub api_server_url: Option<String>,
 }
 
-#[derive(Serialize)]
-struct GetCurrentUserRequest {
-    #[serde(rename = "authToken")]
-    auth_token: String,
-}
-
-#[derive(Deserialize, Default)]
-pub struct PlanInfo {
-    #[serde(rename = "planName", default)]
+pub struct GetCurrentUserResponse {
     pub plan_name: Option<String>,
 }
 
-#[derive(Deserialize, Default)]
-pub struct GetCurrentUserResponse {
-    #[serde(rename = "planInfo", default)]
-    pub plan_info: Option<PlanInfo>,
+#[derive(Deserialize)]
+pub struct DevinLoginResponse {
+    pub token: String,
+    pub user_id: String,
+    pub email: String,
+}
+
+pub struct WindsurfPostAuthResponse {
+    pub session_token: String,
+    pub account_id: String,
+    pub org_id: String,
 }
 
 #[derive(Serialize)]
@@ -205,18 +207,21 @@ pub async fn login_with_email_password(email: &str, password: &str) -> Result<Lo
 }
 
 /// 查询用户当前订阅计划（对应老版本 getUsageInfo 中的 GetCurrentUser）
+/// 2026-04 新版: request/response 均为 protobuf 格式
 pub async fn get_current_user(id_token: &str) -> Result<GetCurrentUserResponse, String> {
     let client = build_client()?;
+    // field 1 = token, field 2 = 1, field 4 = 1
+    let body = build_proto_auth_request(id_token, &[(2, 1), (4, 1)]);
+
     let resp = client
         .post(GET_CURRENT_USER_URL)
-        .header("Content-Type", "application/json")
+        .header("Content-Type", "application/proto")
         .header("Connect-Protocol-Version", "1")
+        .header("x-auth-token", id_token)
         .header("User-Agent", USER_AGENT)
         .header("Origin", "https://windsurf.com")
-        .header("Referer", "https://windsurf.com/")
-        .json(&GetCurrentUserRequest {
-            auth_token: id_token.to_string(),
-        })
+        .header("Referer", "https://windsurf.com/profile")
+        .body(body)
         .send()
         .await
         .map_err(|e| network_error(&e))?;
@@ -227,10 +232,94 @@ pub async fn get_current_user(id_token: &str) -> Result<GetCurrentUserResponse, 
         return Err(format!("查询用户信息失败 ({}): {}", status, body));
     }
 
-    let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
-    eprintln!("[get_current_user] 原始响应: {}", body);
-    serde_json::from_str::<GetCurrentUserResponse>(&body)
-        .map_err(|e| format!("解析用户信息失败: {}", e))
+    let raw = resp.bytes().await.map_err(|e| format!("读取响应失败: {}", e))?;
+    eprintln!("[get_current_user] 响应 {} bytes", raw.len());
+
+    // 解析 protobuf 响应，寻找 plan name
+    let top_fields = parse_protobuf_fields(&raw);
+    for (fnum, wt, data) in &top_fields {
+        match wt {
+            0 => {
+                let mut bytes = [0u8; 8];
+                let len = data.len().min(8);
+                bytes[..len].copy_from_slice(&data[..len]);
+                eprintln!("[get_current_user] field {} varint={}", fnum, u64::from_le_bytes(bytes));
+            }
+            2 => {
+                if let Ok(s) = String::from_utf8(data.clone()) {
+                    eprintln!("[get_current_user] field {} str=\"{}\"", fnum, s);
+                } else {
+                    eprintln!("[get_current_user] field {} bytes len={}", fnum, data.len());
+                    let sub = parse_protobuf_fields(data);
+                    for (sfnum, swt, sdata) in &sub {
+                        match swt {
+                            0 => {
+                                let mut sb = [0u8; 8];
+                                let sl = sdata.len().min(8);
+                                sb[..sl].copy_from_slice(&sdata[..sl]);
+                                eprintln!("[get_current_user]   sub field {} varint={}", sfnum, u64::from_le_bytes(sb));
+                            }
+                            2 => {
+                                if let Ok(ss) = String::from_utf8(sdata.clone()) {
+                                    eprintln!("[get_current_user]   sub field {} str=\"{}\"", sfnum, ss);
+                                } else {
+                                    eprintln!("[get_current_user]   sub field {} bytes len={}", sfnum, sdata.len());
+                                }
+                            }
+                            _ => eprintln!("[get_current_user]   sub field {} wire={}", sfnum, swt),
+                        }
+                    }
+                }
+            }
+            _ => eprintln!("[get_current_user] field {} wire={}", fnum, wt),
+        }
+    }
+
+    // 尝试多种路径提取 plan name：
+    // 路径1: field 1 (inner) -> field 1 (config) -> field 2 (plan_name) — 与 GetPlanStatus 同构
+    // 路径2: 直接在顶层找 string 字段
+    let mut plan_name = None;
+
+    // 路径1: 类似 PlanStatus 结构
+    if let Some(inner_data) = get_submessage_field(&top_fields, 1) {
+        let inner_fields = parse_protobuf_fields(inner_data);
+        // 尝试 inner.field1 (config submessage) -> field2 (plan_name)
+        if let Some(config_data) = get_submessage_field(&inner_fields, 1) {
+            let config_fields = parse_protobuf_fields(config_data);
+            if let Some(name) = get_string_field(&config_fields, 2) {
+                if !name.is_empty() {
+                    plan_name = Some(name);
+                }
+            }
+        }
+        // 也尝试 inner 中直接找 plan_name string 字段
+        if plan_name.is_none() {
+            if let Some(name) = get_string_field(&inner_fields, 2) {
+                if !name.is_empty() {
+                    plan_name = Some(name);
+                }
+            }
+        }
+    }
+
+    // 路径2: 遍历所有 submessage 找含 "Trial"/"Free"/"Pro" 的 string
+    if plan_name.is_none() {
+        for (_, wt, data) in &top_fields {
+            if *wt == 2 {
+                if let Ok(s) = String::from_utf8(data.clone()) {
+                    let lower = s.to_lowercase();
+                    if lower == "trial" || lower == "free" || lower == "pro" {
+                        plan_name = Some(s);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    eprintln!("[get_current_user] extracted plan_name={:?}", plan_name);
+
+    Ok(GetCurrentUserResponse { plan_name })
 }
 
 #[derive(Debug, Default)]
@@ -272,16 +361,19 @@ fn decode_varint(data: &[u8], pos: &mut usize) -> Option<u64> {
     Some(result)
 }
 
-fn build_plan_status_request(jwt_token: &str) -> Vec<u8> {
+fn build_proto_auth_request(jwt_token: &str, extra_fields: &[(u32, u64)]) -> Vec<u8> {
     let token_bytes = jwt_token.as_bytes();
     let mut body = Vec::new();
     // field 1, wire type 2 (length-delimited) = tag 0x0A
     body.push(0x0A);
     body.extend_from_slice(&encode_varint(token_bytes.len() as u64));
     body.extend_from_slice(token_bytes);
-    // field 2, wire type 0 (varint) = tag 0x10, value 1
-    body.push(0x10);
-    body.push(0x01);
+    // additional varint fields
+    for &(field_number, value) in extra_fields {
+        let tag = (field_number << 3) | 0; // wire type 0 = varint
+        body.extend_from_slice(&encode_varint(tag as u64));
+        body.extend_from_slice(&encode_varint(value));
+    }
     body
 }
 
@@ -344,7 +436,8 @@ fn get_submessage_field<'a>(fields: &'a [(u32, u8, Vec<u8>)], field_number: u32)
 
 pub async fn get_plan_status(id_token: &str) -> Result<PlanStatus, String> {
     let client = build_client()?;
-    let body = build_plan_status_request(id_token);
+    // field 1 = token, field 2 = 1
+    let body = build_proto_auth_request(id_token, &[(2, 1)]);
 
     let resp = client
         .post(GET_PLAN_STATUS_URL)
@@ -447,6 +540,141 @@ pub async fn get_plan_status(id_token: &str) -> Result<PlanStatus, String> {
         weekly_reset_at,
         expires_at,
     })
+}
+
+/// Devin 原生登录（绕过 Firebase）
+pub async fn devin_auth_login(email: &str, password: &str) -> Result<DevinLoginResponse, String> {
+    let client = build_client()?;
+    let resp = client
+        .post(DEVIN_AUTH_LOGIN_URL)
+        .header("Content-Type", "application/json")
+        .header("User-Agent", USER_AGENT)
+        .header("Origin", "https://windsurf.com")
+        .header("Referer", "https://windsurf.com/account/login")
+        .json(&serde_json::json!({ "email": email, "password": password }))
+        .send()
+        .await
+        .map_err(|e| network_error(&e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let friendly = if body.contains("Invalid email or password") {
+            "邮箱或密码错误".to_string()
+        } else {
+            format!("Devin登录失败 ({}): {}", status, body)
+        };
+        return Err(friendly);
+    }
+
+    resp.json::<DevinLoginResponse>()
+        .await
+        .map_err(|e| format!("解析Devin登录响应失败: {}", e))
+}
+
+/// WindsurfPostAuth: auth1_token → session_token（一步到位，无需 apiKey）
+pub async fn windsurf_post_auth(auth1_token: &str, api_server_url: &str) -> Result<WindsurfPostAuthResponse, String> {
+    let client = build_client()?;
+    let url = format!("{}/exa.seat_management_pb.SeatManagementService/WindsurfPostAuth", api_server_url);
+
+    let mut body = Vec::new();
+    encode_string_field(&mut body, 1, auth1_token);
+
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/proto")
+        .header("Connect-Protocol-Version", "1")
+        .header("X-Api-Key", auth1_token)
+        .header("User-Agent", CONNECT_USER_AGENT)
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| network_error(&e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("WindsurfPostAuth失败 ({}): {}", status, body));
+    }
+
+    let raw = resp.bytes().await.map_err(|e| format!("读取PostAuth响应失败: {}", e))?;
+    let fields = parse_protobuf_fields(&raw);
+
+    let session_token = get_string_field(&fields, 1)
+        .ok_or_else(|| "PostAuth响应中未找到session_token".to_string())?;
+    let account_id = get_string_field(&fields, 4).unwrap_or_default();
+    let org_id = get_string_field(&fields, 5).unwrap_or_default();
+
+    eprintln!("[windsurf_post_auth] session_token len={}, account={}, org={}", session_token.len(), account_id, org_id);
+
+    Ok(WindsurfPostAuthResponse {
+        session_token,
+        account_id,
+        org_id,
+    })
+}
+
+/// 用 apiKey 获取 devin-session-token（新版 auth 流程）
+/// api_server_url 形如 "https://server.self-serve.windsurf.com"
+pub async fn get_self_devin_session_token(api_key: &str, api_server_url: &str) -> Result<String, String> {
+    let client = build_client()?;
+    let url = format!("{}/exa.seat_management_pb.SeatManagementService/GetSelfDevinSessionToken", api_server_url);
+
+    // 构造 Metadata 子消息: ide_name(1), extension_version(2), api_key(3), locale(4), os(5), ide_version(7), session_id(10), extension_name(12)
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let mut metadata = Vec::new();
+    encode_string_field(&mut metadata, 1, "windsurf");
+    encode_string_field(&mut metadata, 7, "1.99.0");
+    encode_string_field(&mut metadata, 12, "windsurf");
+    encode_string_field(&mut metadata, 2, "2.25.0");
+    encode_string_field(&mut metadata, 3, api_key);
+    encode_string_field(&mut metadata, 4, "en");
+    encode_string_field(&mut metadata, 5, "darwin");
+    encode_string_field(&mut metadata, 10, &session_id);
+
+    // 构造 GetSelfDevinSessionTokenRequest: metadata(1)
+    let mut body = Vec::new();
+    let tag = (1u64 << 3) | 2;
+    body.extend_from_slice(&encode_varint(tag));
+    body.extend_from_slice(&encode_varint(metadata.len() as u64));
+    body.extend_from_slice(&metadata);
+
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/proto")
+        .header("Connect-Protocol-Version", "1")
+        .header("X-Api-Key", api_key)
+        .header("User-Agent", CONNECT_USER_AGENT)
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| network_error(&e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("获取SessionToken失败 ({}): {}", status, body));
+    }
+
+    let raw = resp.bytes().await.map_err(|e| format!("读取SessionToken响应失败: {}", e))?;
+    let fields = parse_protobuf_fields(&raw);
+    let token = get_string_field(&fields, 1)
+        .ok_or_else(|| "SessionToken响应中未找到token字段".to_string())?;
+
+    if !token.starts_with("devin-session-token$") {
+        return Err(format!("SessionToken格式异常: {}", &token[..token.len().min(50)]));
+    }
+
+    eprintln!("[get_self_devin_session_token] 获取成功, len={}", token.len());
+    Ok(token)
+}
+
+fn encode_string_field(buf: &mut Vec<u8>, field_number: u32, value: &str) {
+    let tag = ((field_number as u64) << 3) | 2;
+    let data = value.as_bytes();
+    buf.extend_from_slice(&encode_varint(tag));
+    buf.extend_from_slice(&encode_varint(data.len() as u64));
+    buf.extend_from_slice(data);
 }
 
 /// 用 idToken 注册获取 apiKey（对应老版本 getApiKey）
