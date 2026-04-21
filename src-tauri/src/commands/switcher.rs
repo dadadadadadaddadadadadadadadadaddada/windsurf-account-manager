@@ -142,7 +142,7 @@ async fn get_firebase_token(account: &crate::models::Account) -> Result<(String,
 }
 
 async fn get_credentials(account: &crate::models::Account) -> Result<(String, String, String, String, String), String> {
-    // 已有完整凭证 → 直接复用，不走 Firebase
+    // 已有完整凭证 → 直接复用
     let has_full_credentials = !account.api_key.is_empty()
         && !account.name.is_empty()
         && !account.api_server_url.is_empty();
@@ -157,7 +157,24 @@ async fn get_credentials(account: &crate::models::Account) -> Result<(String, St
         ));
     }
 
-    // 无 apiKey → 必须通过 Firebase + RegisterUser 获取
+    // 路径1: Devin 原生登录 → WindsurfPostAuth → session_token → RegisterUser
+    if !account.email.is_empty() && !account.password.is_empty() {
+        if let Ok(login_resp) = firebase::devin_auth_login(&account.email, &account.password).await {
+            let srv = "https://server.self-serve.windsurf.com";
+            if let Ok(post_auth) = firebase::windsurf_post_auth(&login_resp.token, srv).await {
+                let register_resp = firebase::register_user(&post_auth.session_token).await?;
+                let api_key = register_resp.api_key.unwrap_or_default();
+                let name = register_resp.name.unwrap_or_default();
+                let api_server_url = register_resp.api_server_url
+                    .unwrap_or_else(|| srv.to_string());
+                eprintln!("[get_credentials] Devin链路成功: name={}", name);
+                return Ok((api_key, name, api_server_url, String::new(), String::new()));
+            }
+        }
+        eprintln!("[get_credentials] Devin链路失败, 降级Firebase");
+    }
+
+    // 路径2: 降级 Firebase + RegisterUser
     let (id_token, refresh_token) = get_firebase_token(account).await?;
     let register_resp = firebase::register_user(&id_token).await?;
 

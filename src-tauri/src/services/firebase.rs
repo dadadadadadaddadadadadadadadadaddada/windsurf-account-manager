@@ -677,18 +677,23 @@ fn encode_string_field(buf: &mut Vec<u8>, field_number: u32, value: &str) {
     buf.extend_from_slice(data);
 }
 
-/// 用 idToken 注册获取 apiKey（对应老版本 getApiKey）
-pub async fn register_user(id_token: &str) -> Result<RegisterUserResponseRaw, String> {
+/// 用 token（session_token 或 idToken）注册，获取 apiKey / name / apiServerUrl
+/// 使用 protobuf 格式，兼容 session_token 和 Firebase idToken
+pub async fn register_user(token: &str) -> Result<RegisterUserResponseRaw, String> {
     let client = build_client()?;
+
+    // 构造 protobuf 请求: field 1 = token
+    let mut body = Vec::new();
+    encode_string_field(&mut body, 1, token);
+
     let resp = client
         .post(REGISTER_USER_URL)
-        .header("Content-Type", "application/json")
-        .header("User-Agent", USER_AGENT)
+        .header("Content-Type", "application/proto")
+        .header("Connect-Protocol-Version", "1")
+        .header("User-Agent", CONNECT_USER_AGENT)
         .header("Origin", "https://windsurf.com")
         .header("Referer", "https://windsurf.com/")
-        .json(&RegisterUserRequest {
-            firebase_id_token: id_token.to_string(),
-        })
+        .body(body)
         .send()
         .await
         .map_err(|e| network_error(&e))?;
@@ -696,11 +701,18 @@ pub async fn register_user(id_token: &str) -> Result<RegisterUserResponseRaw, St
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("获取ApiKey失败 ({}): {}", status, body));
+        return Err(format!("注册用户失败 ({}): {}", status, body));
     }
 
-    let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
-    eprintln!("[register_user] 原始响应: {}", body);
-    serde_json::from_str::<RegisterUserResponseRaw>(&body)
-        .map_err(|e| format!("解析ApiKey响应失败: {}", e))
+    let raw = resp.bytes().await.map_err(|e| format!("读取响应失败: {}", e))?;
+    let fields = parse_protobuf_fields(&raw);
+
+    let api_key = get_string_field(&fields, 1);
+    let name = get_string_field(&fields, 2);
+    let api_server_url = get_string_field(&fields, 3);
+
+    eprintln!("[register_user] api_key len={}, name={:?}, url={:?}",
+        api_key.as_ref().map(|s| s.len()).unwrap_or(0), name, api_server_url);
+
+    Ok(RegisterUserResponseRaw { api_key, name, api_server_url })
 }
